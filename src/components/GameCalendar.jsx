@@ -6,12 +6,10 @@ import {
 } from "@mui/material";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import { normalizeNatTvJson } from "../utils/natTvFromJson";
 
 /* ---------------- small date helpers ---------------- */
 function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
 function addMonths(d,n){ const x=new Date(d); x.setDate(1); x.setMonth(x.getMonth()+n); return x; }
-function todayKey(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function dateKeyFromDate(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
 /* ---------------- data helpers ---------------- */
@@ -37,9 +35,64 @@ function buildMonthMatrix(monthStart) {
   return days;
 }
 
-/* ---------------- drawer ---------------- */
+/* ---------------- stage dot color ---------------- */
 const stageDotColor = (id)=> (Number(id)===1?'warning.main':Number(id)===3?'secondary.main':'success.main');
 
+/* ---------------- team code map ---------------- */
+const TEAM_CODE = {
+  "Atlanta Hawks":"ATL","Boston Celtics":"BOS","Brooklyn Nets":"BKN","Charlotte Hornets":"CHA","Chicago Bulls":"CHI",
+  "Cleveland Cavaliers":"CLE","Dallas Mavericks":"DAL","Denver Nuggets":"DEN","Detroit Pistons":"DET","Golden State Warriors":"GSW",
+  "Houston Rockets":"HOU","Indiana Pacers":"IND","LA Clippers":"LAC","Los Angeles Lakers":"LAL","Memphis Grizzlies":"MEM",
+  "Miami Heat":"MIA","Milwaukee Bucks":"MIL","Minnesota Timberwolves":"MIN","New Orleans Pelicans":"NOP","New York Knicks":"NYK",
+  "Oklahoma City Thunder":"OKC","Orlando Magic":"ORL","Philadelphia 76ers":"PHI","Phoenix Suns":"PHX","Portland Trail Blazers":"POR",
+  "Sacramento Kings":"SAC","San Antonio Spurs":"SAS","Toronto Raptors":"TOR","Utah Jazz":"UTA","Washington Wizards":"WAS"
+};
+
+/* ---------------- transform JSON → team-scoped events ----------------
+   Expected JSON shape in /public/all-games-subject-to-change.json:
+   {
+     "season": "2025-2026",
+     "regular_season_games": [
+       { "date": "2025-10-21", "home": "Los Angeles Lakers", "away": "Golden State Warriors" },
+       ...
+     ]
+   }
+----------------------------------------------------------------------- */
+function buildEventsFromSchedule(json){
+  const rows = [];
+  const games = json?.regular_season_games || [];
+  for (const g of games) {
+    if (!g?.date || !g?.home || !g?.away) continue;
+    const iso = `${g.date}T00:00:00Z`; // time not provided → midnight UTC
+    const d = new Date(g.date);
+    const dateKey = dateKeyFromDate(d);
+    const seasonStageId = 2;          // 2 = Regular Season
+    const et = "TBD";
+
+    const homeTeam = g.home;
+    const awayTeam = g.away;
+
+    rows.push({
+      _iso: iso, dateKey, et, seasonStageId,
+      homeAway: "Home",
+      _teamName: homeTeam,
+      _teamCode: TEAM_CODE[homeTeam] || homeTeam,
+      opp: awayTeam
+    });
+
+    rows.push({
+      _iso: iso, dateKey, et, seasonStageId,
+      homeAway: "Away",
+      _teamName: awayTeam,
+      _teamCode: TEAM_CODE[awayTeam] || awayTeam,
+      opp: homeTeam
+    });
+  }
+  rows.sort((a,b)=> (a._iso||"").localeCompare(b._iso||"") || (a._teamName||"").localeCompare(b._teamName||""));
+  return rows;
+}
+
+/* ---------------- drawer ---------------- */
 function DayDrawer({ open, onClose, date, items }){
   return (
     <Drawer anchor="bottom" open={open} onClose={onClose} PaperProps={{ sx:{ borderTopLeftRadius:1, borderTopRightRadius:1 } }}>
@@ -155,6 +208,7 @@ export default function GameCalendar(){
   const [allEvents,setAllEvents]=useState([]);
   const [viewMonth,setViewMonth]=useState(firstOfMonth(new Date()));
   const [loadErr,setLoadErr]=useState(null);
+  const [loading,setLoading]=useState(true);
 
   useEffect(()=>{
     const handler=e=>{ if(e?.detail) setTeam(e.detail); };
@@ -162,59 +216,41 @@ export default function GameCalendar(){
     return ()=> window.removeEventListener("team:change", handler);
   },[]);
 
-  // Load JSON once (passthrough if already normalized)
+  // Fetch from /public at runtime
   useEffect(()=>{
     let cancelled=false;
-
-    const sortCal = rows =>
-      [...rows].sort(
-        (a,b)=> String(a.dateKey||"").localeCompare(String(b.dateKey||""))
-            || String(a._iso||"").localeCompare(String(b._iso||""))
-      );
-
-    (async()=>{
+    (async ()=>{
       try{
-        const r = await fetch("/all-games-subject-to-change.json", { cache: "no-store" });
-        if(!r.ok) throw new Error(`HTTP ${r.status}`);
-        const json = await r.json();
-
-        // PASSTHROUGH when your JSON is already in calendar row shape
-        const isCalShape = Array.isArray(json) && json[0] && json[0].dateKey && (json[0]._teamCode || json[0]._teamName);
-        const parsed = isCalShape ? sortCal(json) : normalizeNatTvJson(json);
-
-        // Jump safely to first month that exists in data (not "future only")
-        if (!cancelled && parsed.length) {
-          const first = parsed[0].dateKey;
-          const m = first && first.match(/^(\d{4})-(\d{2})-\d{2}$/);
+        setLoading(true);
+        const res = await fetch("/all-games-subject-to-change.json", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status} loading schedule JSON`);
+        const scheduleJson = await res.json();
+        const rows = buildEventsFromSchedule(scheduleJson);
+        if (cancelled) return;
+        setAllEvents(rows);
+        setLoadErr(null);
+        if (rows.length) {
+          const m = rows[0].dateKey.match(/^(\d{4})-(\d{2})-\d{2}$/);
           if (m) setViewMonth(new Date(Number(m[1]), Number(m[2]) - 1, 1));
         }
-
-        if(!cancelled){
-          setLoadErr(null);
-          setAllEvents(parsed);
-        }
       }catch(e){
-        if(!cancelled){
+        if (!cancelled){
           setLoadErr(e?.message || String(e));
           setAllEvents([]);
         }
+      }finally{
+        if (!cancelled) setLoading(false);
       }
     })();
-
     return ()=>{ cancelled=true; };
   },[]);
 
-
-    // ONLY show future games for the selected team
-    const events = useMemo(() => {
+  // ONLY show games for the selected team in the visible month
+  const events = useMemo(() => {
     if (!allEvents?.length || !team?.code) return [];
-
-    // yyyy-mm for the currently visible month
     const y = viewMonth.getFullYear();
     const m = String(viewMonth.getMonth() + 1).padStart(2, '0');
     const monthKey = `${y}-${m}`;
-
-    // keep rows that match the visible month and the selected team
     return allEvents.filter(ev =>
       (ev.dateKey || '').startsWith(monthKey) &&
       ev._teamCode === team.code
@@ -224,7 +260,7 @@ export default function GameCalendar(){
   const eventsMap=useMemo(()=> bucketByDay(events),[events]);
 
   return (
-    <Box sx={{ mx:'auto', width:'100%', maxWidth:{ xs: 300, md: 400, lg: 500 } }}>
+    <Box sx={{ mx:'auto', width:'100%', maxWidth:{ xs: 500, md: 600, lg: 700 } }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb:2 }}>
         <Stack direction="row" spacing={1} alignItems="center">
           <Typography variant="h6" sx={{ fontSize:{ xs:18, sm:20 }, fontWeight:700 }}>
@@ -239,14 +275,18 @@ export default function GameCalendar(){
         </Stack>
       </Stack>
 
-      <MonthGrid monthStart={viewMonth} eventsMap={eventsMap} />
+      {loading ? (
+        <Card variant="outlined"><CardContent><Typography variant="body2">Loading schedule…</Typography></CardContent></Card>
+      ) : (
+        <MonthGrid monthStart={viewMonth} eventsMap={eventsMap} />
+      )}
 
-      {events.length===0 && (
+      {(!loading && events.length===0) && (
         <Stack sx={{ mt:2 }}>
           <Typography variant="body2" sx={{ opacity:0.8 }}>
             {team?.code
-              ? `No upcoming national TV games for ${team.code} in the current view.`
-              : 'Pick a team to see upcoming national TV games.'}
+              ? `No regular-season games for ${team.code} in this month.`
+              : 'Pick a team to see games.'}
           </Typography>
           {loadErr && (
             <Typography variant="caption" sx={{ opacity:0.9, color:'warning.main' }}>
