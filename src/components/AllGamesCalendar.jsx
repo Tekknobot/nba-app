@@ -9,7 +9,7 @@ import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CloseIcon from "@mui/icons-material/Close";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
-import "@fontsource/dancing-script/700.css";
+import "@fontsource/bebas-neue"; // defaults to 400 weight
 
 /* ========= small date helpers ========= */
 function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
@@ -388,18 +388,16 @@ export default function AllGamesCalendar(){
             <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth:0 }}>
                 <Typography
                 variant="h6"
-                noWrap
                 sx={{
-                    fontFamily: '"Dancing Script", cursive',
-                    fontWeight: 700,
-                    fontSize: { xs: 24, sm: 34 },   // a touch larger for script
-                    letterSpacing: 0.3,
-                    maxWidth: '60%',
-                    lineHeight: 1.1
+                    fontFamily: '"Bebas Neue", sans-serif',
+                    fontSize: { xs: 26, sm: 32 },
+                    letterSpacing: 1,
+                    fontWeight: 400
                 }}
                 >
-                SwishOne
+                Pivt
                 </Typography>
+
             <Divider orientation="vertical" flexItem sx={{ opacity:0.2 }} />
 
             <Stack direction="row" spacing={1} alignItems="center">
