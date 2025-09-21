@@ -1,32 +1,172 @@
 // server/index.js
-const path = require("path");
 const express = require("express");
+const fetch = (...args) => import("node-fetch").then(m => m.default(...args));
+
 const app = express();
-const PORT = process.env.PORT || 5000;
-const URLS = [
-  "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json",
-  "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json",
-  "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_9.json",
-];
+const PORT = process.env.PORT || 5001;
 
-app.get("/api/nba/schedule", async (_req, res) => {
-  for (const u of URLS) {
-    try {
-      const r = await fetch(u, { cache: "no-store" });
-      if (r.ok) {
-        const json = await r.json();
-        res.set("Cache-Control", "public, max-age=900");
-        return res.json(json);
-      }
-    } catch {}
-  }
-  res.status(502).json({ error: "Failed to fetch NBA schedule" });
-});
+/** UI -> BBR codes (note BRK/CHO/PHO) */
+const UI_TO_BBR = {
+  ATL:"ATL", BOS:"BOS", BKN:"BRK", BRK:"BRK",
+  CHA:"CHO", CHO:"CHO",
+  CHI:"CHI", CLE:"CLE", DAL:"DAL", DEN:"DEN", DET:"DET",
+  GSW:"GSW", HOU:"HOU", IND:"IND", LAC:"LAC", LAL:"LAL",
+  MEM:"MEM", MIA:"MIA", MIL:"MIL", MIN:"MIN", NOP:"NOP",
+  NYK:"NYK", OKC:"OKC", ORL:"ORL", PHI:"PHI",
+  PHX:"PHO", PHO:"PHO",
+  POR:"POR", SAC:"SAC", SAS:"SAS", TOR:"TOR", UTA:"UTA", WAS:"WAS"
+};
 
-if (process.env.NODE_ENV === "production") {
-  const buildPath = path.join(__dirname, "..", "build");
-  app.use(express.static(buildPath));
-  app.get("*", (_req, res) => res.sendFile(path.join(buildPath, "index.html")));
+const NAME_TO_CODE = {
+  "Atlanta Hawks":"ATL","Boston Celtics":"BOS","Brooklyn Nets":"BRK","Charlotte Hornets":"CHO","Chicago Bulls":"CHI",
+  "Cleveland Cavaliers":"CLE","Dallas Mavericks":"DAL","Denver Nuggets":"DEN","Detroit Pistons":"DET","Golden State Warriors":"GSW",
+  "Houston Rockets":"HOU","Indiana Pacers":"IND","Los Angeles Clippers":"LAC","Los Angeles Lakers":"LAL","Memphis Grizzlies":"MEM",
+  "Miami Heat":"MIA","Milwaukee Bucks":"MIL","Minnesota Timberwolves":"MIN","New Orleans Pelicans":"NOP","New York Knicks":"NYK",
+  "Oklahoma City Thunder":"OKC","Orlando Magic":"ORL","Philadelphia 76ers":"PHI","Phoenix Suns":"PHO","Portland Trail Blazers":"POR",
+  "Sacramento Kings":"SAC","San Antonio Spurs":"SAS","Toronto Raptors":"TOR","Utah Jazz":"UTA","Washington Wizards":"WAS"
+};
+
+/* -------- simple cache -------- */
+const cache = new Map();
+const TTL_MS = 60 * 60 * 1000;
+const getCache = k => {
+  const v = cache.get(k); if (!v) return null;
+  if (Date.now() - v.t > TTL_MS) { cache.delete(k); return null; }
+  return v.v;
+};
+const setCache = (k, v) => cache.set(k, { v, t: Date.now() });
+
+/* -------- CSV parsing helpers -------- */
+function splitCsvLine(line) {
+  const m = line.match(/("([^"]|"")*"|[^,]*)/g);
+  if (!m) return [];
+  return m.filter(s => s !== "")
+          .map(s => s.replace(/^"(.*)"$/, "$1").replace(/""/g, '"'));
 }
 
-app.listen(PORT, () => console.log(`Server http://localhost:${PORT}`));
+function parseCsvToLast10(bbrCode, csv) {
+  const lines = csv.split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return [];
+  const header = splitCsvLine(lines[0]).map(h => h.trim());
+  const idx = {
+    date: header.findIndex(h => /date/i.test(h)),
+    opp: header.findIndex(h => /opponent/i.test(h)),
+    loc: header.findIndex(h => /(home|location|game_location|@)/i.test(h)),
+    res: header.findIndex(h => /^result$/i.test(h)),
+    tm:  header.findIndex(h => /(^|[^a-z])tm([^a-z]|$)/i.test(h)),
+    oppPts: header.findIndex(h => /(^|[^a-z])opp([^a-z]|$)/i.test(h)),
+    type: header.findIndex(h => /type/i.test(h))
+  };
+
+  const finished = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (!cols.length) continue;
+
+    const type = (idx.type >= 0 ? cols[idx.type] : "").trim();
+    if (type && !/regular/i.test(type)) continue;
+
+    const date = (idx.date >= 0 ? cols[idx.date] : "").trim();
+    const oppName = (idx.opp >= 0 ? cols[idx.opp] : "").trim();
+    const result = (idx.res >= 0 ? cols[idx.res] : "").trim();   // W/L
+    const tmPts  = (idx.tm  >= 0 ? cols[idx.tm ] : "").trim();
+    const opPts  = (idx.oppPts >= 0 ? cols[idx.oppPts] : "").trim();
+    if (!date || !result || !tmPts || !opPts) continue;          // completed only
+
+    const loc = (idx.loc >= 0 ? cols[idx.loc] : "").trim();
+    const homeAway = loc === "@" ? "Away" : "Home";
+    const oppCode = NAME_TO_CODE[oppName] || oppName;
+    const scoreStr = `${bbrCode} ${tmPts} - ${oppCode} ${opPts}`;
+
+    finished.push({ date, opp: oppCode, homeAway, result, score: scoreStr });
+  }
+
+  finished.sort((a,b)=> new Date(b.date) - new Date(a.date));
+  return finished.slice(0, 10);
+}
+
+/* -------- fetch helpers -------- */
+function buildHeaders(refererUrl) {
+  return {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "Accept": "text/csv,text/plain,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": refererUrl,
+    "Connection": "keep-alive",
+  };
+}
+
+async function fetchCsvDirect(bbrCode, season) {
+  const csvUrl  = `https://widgets.sports-reference.com/w/bbr_teams_games.cgi?team=${bbrCode}&year=${season}`;
+  const referer = `https://www.basketball-reference.com/teams/${bbrCode}/${season}_games.html`;
+  const res = await fetch(csvUrl, { headers: buildHeaders(referer), redirect: "follow" });
+  const text = await res.text();
+  console.log(`[direct] ${bbrCode} ${season} -> ${res.status} len=${text.length} first="${text.slice(0,120).replace(/\n/g,' ')}"`);
+  return { status: res.status, text };
+}
+
+async function fetchCsvViaProxy(bbrCode, season) {
+  const proxyUrl = `https://r.jina.ai/http://widgets.sports-reference.com/w/bbr_teams_games.cgi?team=${bbrCode}&year=${season}`;
+  const ua = buildHeaders("")["User-Agent"];
+  const res = await fetch(proxyUrl, { headers: { "User-Agent": ua }, redirect: "follow" });
+  const text = await res.text();
+  console.log(`[proxy ] ${bbrCode} ${season} -> ${res.status} len=${text.length} first="${text.slice(0,120).replace(/\n/g,' ')}"`);
+  return { status: res.status, text };
+}
+
+/* -------- routes -------- */
+app.get("/api/health", (req, res) => res.json({ ok: true, port: String(PORT) }));
+
+// GET /api/last10/:code?season=2025  (defaults to 2025)
+app.get("/api/last10/:code", async (req, res) => {
+  const uiCode = (req.params.code || "").toUpperCase();
+  const season = Number(req.query.season) || 2025;
+  const bbrCode = UI_TO_BBR[uiCode];
+  if (!bbrCode) return res.status(400).json({ error: `Unknown team code: ${uiCode}` });
+
+  const cacheKey = `${bbrCode}:${season}`;
+  const cached = getCache(cacheKey);
+  if (cached) {
+    res.set("Cache-Control", "public, max-age=3600");
+    return res.json(cached);
+  }
+
+  let direct = { status: 0, text: "" };
+
+  try {
+    direct = await fetchCsvDirect(bbrCode, season);
+    if (direct.status === 200 && direct.text && !/^<!DOCTYPE/i.test(direct.text)) {
+      const games = parseCsvToLast10(bbrCode, direct.text);
+      const payload = { team: uiCode, games, _source: "direct" };
+      setCache(cacheKey, payload);
+      res.set("Cache-Control", "public, max-age=3600");
+      return res.json(payload);
+    }
+    console.warn(`[BBR] Direct CSV not usable: status=${direct.status}`);
+  } catch (e) {
+    console.warn(`[BBR] Direct CSV threw: ${e?.message || e}`);
+  }
+
+  try {
+    const proxy = await fetchCsvViaProxy(bbrCode, season);
+    if (proxy.status === 200 && proxy.text) {
+      const games = parseCsvToLast10(bbrCode, proxy.text);
+      const payload = { team: uiCode, games, _source: "proxy" };
+      setCache(cacheKey, payload);
+      res.set("Cache-Control", "public, max-age=3600");
+      return res.json(payload);
+    }
+    return res.status(502).json({
+      error: `Upstream blocked CSV for ${bbrCode} ${season}`,
+      details: { directStatus: direct.status, proxyStatus: proxy.status }
+    });
+  } catch (e) {
+    console.error("[last10] proxy error:", e);
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+/* -------- start -------- */
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
