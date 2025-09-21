@@ -332,17 +332,25 @@ function SquareDay({ d, list, inMonth, today, onClick }) {
 
         {list.length > 0 && (
           <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-            {list.slice(0, 2).map((g, i) => (
-              <Chip
-                key={i}
-                size="small"
-                label={`${g.away.code}@${g.home.code}`}
-                sx={{ borderRadius: 1 }}
-              />
-            ))}
-            {list.length > 2 && (
-              <Chip size="small" label={`+${list.length - 2}`} sx={{ borderRadius: 1 }} />
-            )}
+                {list.slice(0, 2).map((g, i) => (
+                <Chip
+                    key={i}
+                    size="small"
+                    label={`${g.away.code}@${g.home.code}`}
+                    color="secondary"          // <- try "primary" | "secondary" | "success" | "warning" | "info" | "error"
+                    variant="filled"           // <- filled background
+                    sx={{ borderRadius: 1 }}
+                />
+                ))}
+                {list.length > 2 && (
+                <Chip
+                    size="small"
+                    label={`+${list.length - 2}`}
+                    color="secondary"
+                    variant="filled"
+                    sx={{ borderRadius: 1 }}
+                />
+                )}
           </Box>
         )}
       </Box>
