@@ -1,20 +1,18 @@
+// src/App.jsx
 import React from "react";
-import { Container, Paper, Typography } from "@mui/material";
-import TeamPicker from "./components/TeamPicker";
-import GameCalendar from "./components/GameCalendar";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Box } from "@mui/material";
+import AllGamesCalendar from "./components/AllGamesCalendar";
 
-export default function App() {
+export default function App(){
   return (
-    <Container maxWidth="md" sx={{ py: 4 }}>
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <Typography variant="h5" gutterBottom>
-          NBA — Games Calendar (Team View)
-        </Typography>
-        <TeamPicker />
-      </Paper>
-
-      {/* Calendar listens to "team:change" and shows ONLY that team's upcoming games */}
-      <GameCalendar />
-    </Container>
+    <BrowserRouter>
+      <Box sx={{ p:2 }}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/all" replace />} />
+          <Route path="/all" element={<AllGamesCalendar />} />
+        </Routes>
+      </Box>
+    </BrowserRouter>
   );
 }
