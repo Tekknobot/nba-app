@@ -508,8 +508,7 @@ function DayPill({ d, selected, count, onClick }) {
 function GameCard({ game, onPick }) {
   const vsLabel = `${game.away.code} @ ${game.home.code}`;
   const sub = `${game.away.name} at ${game.home.name}`;
-
-  const final = resultMeta(game); // uses your helper below
+  const final = resultMeta(game);
 
   return (
     <Card variant="outlined" sx={{ borderRadius:1 }}>
@@ -520,30 +519,59 @@ function GameCard({ game, onPick }) {
           '&:hover': { bgcolor: 'rgba(25,118,210,0.06)' }
         }}
       >
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ width:'100%' }}>
+        <Stack
+          direction="row"
+          alignItems="flex-start"              // let text take 2 lines if needed
+          spacing={1}
+          sx={{ width:'100%' }}
+        >
           <Avatar sx={{ width:30, height:30, fontSize:12, bgcolor:'primary.main', color:'primary.contrastText' }}>
             {game.home.code}
           </Avatar>
 
-          <Box sx={{ flex:1, minWidth:0 }}>
-            <Typography variant="body2" sx={{ fontWeight:700 }}>
+          {/* TEXT COLUMN */}
+          <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: 700,
+                wordBreak: 'break-word',
+                overflow: 'hidden',
+                display: '-webkit-box',
+                WebkitLineClamp: 1,            // title stays to 1 line
+                WebkitBoxOrient: 'vertical',
+              }}
+            >
               {final ? (
                 <>
                   <span style={{ fontWeight: final.homeWon ? 800 : 600 }}>{game.home.code}</span>
-                  {" vs "}
+                  {' vs '}
                   <span style={{ fontWeight: !final.homeWon ? 800 : 600 }}>{game.away.code}</span>
                 </>
               ) : (
                 vsLabel
               )}
             </Typography>
-            <Typography variant="caption" sx={{ opacity:0.8 }} noWrap>
+
+            <Typography
+              variant="caption"
+              sx={{
+                opacity: 0.8,
+                wordBreak: 'break-word',
+                whiteSpace: 'normal',          // allow wrapping
+                overflow: 'hidden',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,            // clamp to 2 lines on mobile
+                WebkitBoxOrient: 'vertical',
+              }}
+            >
               {sub}
             </Typography>
           </Box>
 
+          {/* RIGHT CHIP(S) – don't let these shrink */}
           {final ? (
-            <Stack direction="row" spacing={0.5}>
+            <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0 }}>
               <Chip size="small" color="success" label="Final" />
               <Chip size="small" variant="outlined" label={final.label} />
             </Stack>
@@ -551,11 +579,12 @@ function GameCard({ game, onPick }) {
             <Chip
               size="small"
               variant="outlined"
+              sx={{ flexShrink: 0, maxWidth: '50vw' }}  // avoid squeezing into text
               label={
-                // Show a clock only when we have a real tip time from BDL (hasClock or live statuses)
                 game?.hasClock || /in progress|halftime|final|end of/i.test(game?.status || "")
-                  ? formatGameLabel(game._iso, { mode: "ET", withTZ: true }) // e.g., "7:30 PM EST"
-                  : dateOnlyLabel(game?.dateKey) // or just "TBD"
+                  ? formatGameLabel(game._iso, { mode: "ET", withTZ: true })
+                  : new Intl.DateTimeFormat(undefined,{ weekday:'short', month:'short', day:'numeric'})
+                      .format(new Date(`${game.dateKey}T12:00:00Z`))
               }
             />
           )}
@@ -564,6 +593,7 @@ function GameCard({ game, onPick }) {
     </Card>
   );
 }
+
 
 /* ========= Main Mobile Calendar (uses balldontlie per-month) ========= */
 export default function AllGamesCalendar(){
