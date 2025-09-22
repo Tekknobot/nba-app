@@ -609,9 +609,6 @@ export default function AllGamesCalendar(){
         setAllGames(rows);
         setLoadErr(null);
 
-        // ensure selectedDate is inside the month
-        const firstDay = new Date(y, mIdx, 1);
-        setSelectedDate(firstDay);
       } catch (e) {
         if (!cancelled){
           setLoadErr(e?.message || String(e));
