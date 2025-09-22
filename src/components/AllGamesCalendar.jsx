@@ -110,7 +110,7 @@ function Last10List({ title, loading, error, data }){
         ) : !data?.games?.length ? (
           <Typography variant="body2" sx={{ opacity:0.8 }}>No data.</Typography>
         ) : (
-          <List dense sx={{ maxHeight: '60vh', overflow:'auto' }}>
+          <List dense sx={{ maxHeight: '45vh', overflow:'auto' }}>
             {data.games.slice(0,10).map((g,i)=>(
               <ListItem key={i} disableGutters>
                 <ListItemText
@@ -260,118 +260,40 @@ function ProbabilityCard({ probs, homeCode, awayCode }) {
   );
 }
 
-function ComparisonDrawer({ open, onClose, game }){
-  const [a,setA]=useState({ loading:true, error:null, data:null }); // away last-10
-  const [b,setB]=useState({ loading:true, error:null, data:null }); // home last-10
-  const [probs, setProbs] = useState(null); // model result
+function ComparisonDrawer({ open, onClose, game }) {
+  const [a, setA] = useState({ loading: true, error: null, data: null }); // away
+  const [b, setB] = useState({ loading: true, error: null, data: null }); // home
+  const [probs, setProbs] = useState(null);
 
-  // fetch last 10 (away = A, home = B)
-  useEffect(()=>{
+  // fetch last 10 (away then home)
+  useEffect(() => {
     if (!open || !game?.home?.code || !game?.away?.code) return;
     let cancelled = false;
 
-    (async()=>{
-      try{
-        setA({ loading:true, error:null, data:null });
-        setB({ loading:true, error:null, data:null });
+    (async () => {
+      try {
+        setA({ loading: true, error: null, data: null });
+        setB({ loading: true, error: null, data: null });
 
-        const [A,B] = await Promise.all([
+        const [A, B] = await Promise.all([
           fetchLast10BDL(game.away.code),
           fetchLast10BDL(game.home.code),
         ]);
         if (cancelled) return;
-        setA({ loading:false, error:null, data:A });
-        setB({ loading:false, error:null, data:B });
-      }catch(e){
+        setA({ loading: false, error: null, data: A });
+        setB({ loading: false, error: null, data: B });
+      } catch (e) {
         if (cancelled) return;
         const msg = e?.message || String(e);
-        setA({ loading:false, error:msg, data:{ team:game?.away?.code, games:[] } });
-        setB({ loading:false, error:msg, data:{ team:game?.home?.code, games:[] } });
+        setA({ loading: false, error: msg, data: { team: game?.away?.code, games: [] } });
+        setB({ loading: false, error: msg, data: { team: game?.home?.code, games: [] } });
       }
     })();
 
-    return ()=>{ cancelled = true; };
+    return () => { cancelled = true; };
   }, [open, game?.home?.code, game?.away?.code]);
 
-  // --- local helpers (scoped here to avoid undefineds) ---
-  function buildProbsForGame({ game, awayData, homeData }) {
-    const gameDateISO =
-      (game?._iso || "").slice(0, 10) ||
-      (game?.dateKey || "") ||
-      new Date().toISOString().slice(0, 10);
-
-    const homeGames = homeData?.games || [];
-    const awayGames = awayData?.games || [];
-    if (!homeGames.length || !awayGames.length) return null;
-
-    const homeSummary = summarizeLastNGames(homeGames, 10);
-    const awaySummary = summarizeLastNGames(awayGames, 10);
-    const homeRestDays = daysRestBefore(gameDateISO, homeGames);
-    const awayRestDays = daysRestBefore(gameDateISO, awayGames);
-    const homeB2B = isBackToBack(gameDateISO, homeGames);
-    const awayB2B = isBackToBack(gameDateISO, awayGames);
-
-    const P = computeGameProbabilities({
-      homeSummary,
-      awaySummary,
-      homeRestDays,
-      awayRestDays,
-      homeB2B,
-      awayB2B,
-      neutralSite: false,
-    });
-
-    return {
-      ...P,
-      factors: explainFactors({ homeSummary, awaySummary, deltas: P.deltas }),
-    };
-  }
-
-  function ProbabilityCard({ probs, homeCode, awayCode }) {
-    if (!probs) return null;
-    const pct = Math.round(probs.pHome * 100);
-    return (
-      <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
-        <CardContent sx={{ p:2 }}>
-          <Stack direction="row" alignItems="baseline" spacing={1}>
-            <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
-              Model edge
-            </Typography>
-            <Typography variant="caption" sx={{ opacity:0.7 }}>
-              (home win)
-            </Typography>
-          </Stack>
-
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
-            <Typography variant="h5" sx={{ fontWeight:800 }}>
-              {pct}%
-            </Typography>
-            <Typography variant="body2" sx={{ opacity:0.75 }}>
-              {homeCode} vs {awayCode}
-            </Typography>
-          </Stack>
-
-          <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
-            <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
-          </Box>
-
-          <List dense sx={{ mt:1 }}>
-            {probs.factors.map((f, i) => (
-              <ListItem key={i} disableGutters sx={{ py:0.25 }}>
-                <ListItemText
-                  primaryTypographyProps={{ variant:'body2' }}
-                  primary={`${f.label}: ${f.value}`}
-                />
-              </ListItem>
-            ))}
-          </List>
-        </CardContent>
-      </Card>
-    );
-  }
-  // --- end helpers ---
-
-  // compute probabilities when lists finish loading
+  // compute probabilities
   useEffect(() => {
     if (!open) return;
     if (a.loading || b.loading) return;
@@ -381,33 +303,68 @@ function ComparisonDrawer({ open, onClose, game }){
   }, [open, a.loading, b.loading, a.error, b.error, a.data, b.data, game]);
 
   return (
-    <Drawer anchor="right" open={open} onClose={onClose}
-      PaperProps={{ sx:{ width:{ xs:'100%', sm: 620 }, p:2, borderTopLeftRadius: { xs:1, sm:0 } } }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb:2 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight:700 }}>
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={onClose}
+      PaperProps={{
+        sx: {
+          width: { xs: '100%', sm: 620 },
+          p: 2,
+          borderTopLeftRadius: { xs: 1, sm: 0 },
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100vh',
+          boxSizing: 'border-box',
+        },
+      }}
+    >
+      {/* header */}
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
           Last 10 — {game?.away?.code} @ {game?.home?.code}
         </Typography>
         <IconButton onClick={onClose}><CloseIcon /></IconButton>
       </Stack>
 
-      <Typography variant="caption" sx={{ opacity:0.8, mb:1, display:'block' }}>
-        Clicked game: {game?.away?.name} at {game?.home?.name}
-      </Typography>
+      {/* scrollable middle */}
+      <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', pr: 0.5 }}>
+        <Typography variant="caption" sx={{ opacity: 0.8, mb: 1, display: 'block' }}>
+          Clicked game: {game?.away?.name} at {game?.home?.name}
+        </Typography>
 
-      <Stack direction={{ xs:'column', sm:'row' }} spacing={2}>
-        <Last10List title={`${game?.away?.code} (${game?.away?.name})`} loading={a.loading} error={a.error} data={a.data}/>
-        <Last10List title={`${game?.home?.code} (${game?.home?.name})`} loading={b.loading} error={b.error} data={b.data}/>
-      </Stack>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+          <Last10List
+            title={`${game?.away?.code} (${game?.away?.name})`}
+            loading={a.loading}
+            error={a.error}
+            data={a.data}
+          />
+          <Last10List
+            title={`${game?.home?.code} (${game?.home?.name})`}
+            loading={b.loading}
+            error={b.error}
+            data={b.data}
+          />
+        </Stack>
 
-      {/* NEW: probability card */}
-      <ProbabilityCard
-        probs={probs}
-        homeCode={game?.home?.code}
-        awayCode={game?.away?.code}
-      />
+        <ProbabilityCard
+          probs={probs}
+          homeCode={game?.home?.code}
+          awayCode={game?.away?.code}
+        />
+      </Box>
 
-      <Box sx={{ mt:2 }}>
-        <Tooltip title="Close"><Button variant="contained" onClick={onClose} fullWidth>Close</Button></Tooltip>
+      {/* sticky footer */}
+      <Box sx={{
+        position: 'sticky',
+        bottom: 0,
+        pt: 1.5,
+        background: (t) => `linear-gradient(180deg, ${t.palette.background.default}00, ${t.palette.background.default} 40%)`,
+      }}>
+        <Tooltip title="Close">
+          <Button variant="contained" onClick={onClose} fullWidth>Close</Button>
+        </Tooltip>
       </Box>
     </Drawer>
   );
