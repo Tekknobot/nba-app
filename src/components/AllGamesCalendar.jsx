@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box, Card, CardContent, Chip, IconButton, Stack, Typography,
   Drawer, Divider, List, ListItem, ListItemText, Button,
-  CircularProgress, Tooltip, ListItemButton, Avatar, Badge
+  CircularProgress, Tooltip, ListItemButton, Avatar
 } from "@mui/material";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
@@ -17,6 +17,14 @@ import {
   computeGameProbabilities,
   explainFactors,
 } from "../utils/probability";
+import {
+  formatISOToLocal,
+  formatISOInZone,
+  shortLocal,
+  shortInET,
+  timeOnlyET,
+  formatGameLabel,
+} from "../utils/datetime";
 
 /* ========= small date helpers ========= */
 function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
@@ -27,7 +35,6 @@ function daysInMonth(year, month){ // month 0..11
   while(d.getMonth()===month){ out.push(new Date(d)); d.setDate(d.getDate()+1); }
   return out;
 }
-const stageDotColor = (id)=> (Number(id)===1?'warning.main':Number(id)===3?'secondary.main':'success.main');
 
 /* ========= team codes (UI labels) ========= */
 const TEAM_CODE = {
@@ -49,43 +56,6 @@ const BDL_TEAM_ID = {
 // 2024–25 season window (season end year = 2025; “summer-ish”)
 const SEASON_START = "2024-10-01";
 const SEASON_END   = "2025-06-30";
-
-/* ========= build events from JSON ========= */
-function buildEventsFromSchedule(json){
-  const rows = [];
-  const games = json?.regular_season_games || [];
-  for (const g of games) {
-    if (!g?.date || !g?.home || !g?.away) continue;
-    const iso = `${g.date}T00:00:00Z`;
-    const d = new Date(g.date);
-    const dateKey = dateKeyFromDate(d);
-    const seasonStageId = 2;
-    const et = "TBD";
-    const homeTeam = g.home, awayTeam = g.away;
-
-    rows.push({
-      _iso: iso,
-      dateKey,
-      et,
-      seasonStageId,
-      home: { name: homeTeam, code: TEAM_CODE[homeTeam] || homeTeam },
-      away: { name: awayTeam, code: TEAM_CODE[awayTeam] || awayTeam }
-    });
-  }
-  rows.sort((a,b)=> (a._iso||"").localeCompare(b._iso||"") || (a.home?.name||"").localeCompare(b.home?.name||""));
-  return rows;
-}
-
-function bucketByDayAll(games){
-  const m = new Map();
-  for (const g of games || []) {
-    const k = g.dateKey; if (!k) continue;
-    if (!m.has(k)) m.set(k, []);
-    m.get(k).push(g);
-  }
-  for (const arr of m.values()) arr.sort((a,b)=> String(a._iso||"").localeCompare(String(b._iso||"")));
-  return m;
-}
 
 /* ========= Last-10 panel bits ========= */
 function Last10List({ title, loading, error, data }){
@@ -128,6 +98,7 @@ function Last10List({ title, loading, error, data }){
   );
 }
 
+/* ========= Fetch last-10 (existing) ========= */
 async function fetchLast10BDL(teamCode) {
   const id = BDL_TEAM_ID[teamCode];
   if (!id) throw new Error(`Unknown team code: ${teamCode}`);
@@ -179,9 +150,72 @@ async function fetchLast10BDL(teamCode) {
   return { team: teamCode, games, _source: "balldontlie" };
 }
 
-// --- DROP-IN: Pure function to compute probs from your fetched last-10 payloads ---
+/* ========= New: Month schedule from balldontlie ========= */
+function monthRange(year, month /* 0-11 */){
+  const start = new Date(year, month, 1);
+  const end   = new Date(year, month + 1, 0);
+  const fmt = (d)=> `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return { start: fmt(start), end: fmt(end) };
+}
+
+// Returns rows shaped like your JSON loader did: {_iso,dateKey,et,home:{name,code},away:{...}}
+async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
+  const { start, end } = monthRange(year, month);
+  const headers = {};
+  const key = process.env.REACT_APP_BDL_API_KEY;
+  if (key) headers["Authorization"] = key;
+
+  let page = 1;
+  const per_page = 100;
+  const rows = [];
+
+  while (true) {
+    const params = new URLSearchParams({
+      start_date: start,
+      end_date: end,
+      per_page: String(per_page),
+      page: String(page),
+    });
+
+    const url = `https://api.balldontlie.io/v1/games?${params.toString()}`;
+    const res = await fetch(url, { headers });
+    if (res.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (!res.ok) throw new Error(`BDL HTTP ${res.status}`);
+
+    const json = await res.json();
+    const data = Array.isArray(json?.data) ? json.data : [];
+    if (!data.length) break;
+
+    for (const g of data) {
+      if (g?.postseason) continue; // regular season only
+      const dateISO = (g?.date || "").slice(0,10); // YYYY-MM-DD
+      if (!dateISO) continue;
+
+      const homeName = g?.home_team?.full_name || g?.home_team?.name || g?.home_team?.abbreviation;
+      const awayName = g?.visitor_team?.full_name || g?.visitor_team?.name || g?.visitor_team?.abbreviation;
+      if (!homeName || !awayName) continue;
+
+      rows.push({
+        _iso: `${dateISO}T00:00:00Z`,
+        dateKey: dateISO,
+        et: (g?.status || "").toLowerCase().includes("scheduled") ? "TBD" : (g?.status || "TBD"),
+        seasonStageId: 2,
+        home: { name: homeName, code: TEAM_CODE[homeName] || (g?.home_team?.abbreviation || homeName) },
+        away: { name: awayName, code: TEAM_CODE[awayName] || (g?.visitor_team?.abbreviation || awayName) },
+      });
+    }
+
+    const totalPages = json?.meta?.total_pages ?? 1;
+    if (page >= totalPages) break;
+    page += 1;
+  }
+
+  rows.sort((a,b)=> (a._iso||"").localeCompare(b._iso||"") || (a.home?.name||"").localeCompare(b.home?.name||""));
+  return rows;
+}
+
+/* ========= Probability helpers for the drawer UI ========= */
 function buildProbsForGame({ game, awayData, homeData }) {
-  // if your game object has _iso: "yyyy-mm-ddTHH:MM:SSZ"
   const gameDateISO =
     (game?._iso || "").slice(0, 10) ||
     (game?.dateKey || "") ||
@@ -214,7 +248,6 @@ function buildProbsForGame({ game, awayData, homeData }) {
   };
 }
 
-// --- DROP-IN: Presentational component for the probability card ---
 function ProbabilityCard({ probs, homeCode, awayCode }) {
   if (!probs) return null;
   const pct = Math.round(probs.pHome * 100);
@@ -239,12 +272,10 @@ function ProbabilityCard({ probs, homeCode, awayCode }) {
           </Typography>
         </Stack>
 
-        {/* progress bar */}
         <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
           <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
         </Box>
 
-        {/* factor list */}
         <List dense sx={{ mt:1 }}>
           {probs.factors.map((f, i) => (
             <ListItem key={i} disableGutters sx={{ py:0.25 }}>
@@ -260,6 +291,7 @@ function ProbabilityCard({ probs, homeCode, awayCode }) {
   );
 }
 
+/* ========= Drawer ========= */
 function ComparisonDrawer({ open, onClose, game }) {
   const [a, setA] = useState({ loading: true, error: null, data: null }); // away
   const [b, setB] = useState({ loading: true, error: null, data: null }); // home
@@ -385,7 +417,7 @@ function DayPill({ d, selected, count, onClick }) {
       size="large"
       aria-label={`${dow} ${day}, ${count || 0} games`}
       sx={{
-        borderRadius: 1,            // was 3 —> tighter corners (~8px)
+        borderRadius: 1,
         minWidth: 96,
         height: 88,
         px: 1.25,
@@ -419,7 +451,7 @@ function DayPill({ d, selected, count, onClick }) {
         sx={{
           mt: 0.9,
           height: 20,
-          borderRadius: 0.75,       // was 1 —> slightly squarer
+          borderRadius: 0.75,
           '& .MuiChip-label': { px: 0.8, fontSize: 11, fontWeight: 700 }
         }}
       />
@@ -448,14 +480,18 @@ function GameCard({ game, onPick }) {
             <Typography variant="body2" sx={{ fontWeight:700 }}>{vsLabel}</Typography>
             <Typography variant="caption" sx={{ opacity:0.8 }}>{sub}</Typography>
           </Box>
-          <Chip size="small" variant="outlined" label={game.et||'TBD'} />
+            <Chip
+            size="small"
+            variant="outlined"
+            label={formatGameLabel(game._iso, { mode: "ET" })}
+            />
         </Stack>
       </ListItemButton>
     </Card>
   );
 }
 
-/* ========= Main Mobile Calendar ========= */
+/* ========= Main Mobile Calendar (uses balldontlie per-month) ========= */
 export default function AllGamesCalendar(){
   const [allGames,setAllGames]=useState([]);
   const [viewMonth,setViewMonth]=useState(firstOfMonth(new Date()));
@@ -467,39 +503,73 @@ export default function AllGamesCalendar(){
   const [compareGame,setCompareGame]=useState(null);
   const [compareOpen,setCompareOpen]=useState(false);
 
-  // load schedule once
-  useEffect(()=>{
-    let cancelled=false;
-    (async ()=>{
-      try{
+  // cache of fetched months so we don’t refetch on every click
+  const [monthCache, setMonthCache] = useState(new Map()); // key: "YYYY-MM" -> rows[]
+
+  // load schedule for the visible month (from balldontlie), cache per month
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
         setLoading(true);
-        const res = await fetch("/all-games-subject-to-change.json", { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status} loading schedule JSON`);
-        const json = await res.json();
-        const rows = buildEventsFromSchedule(json);
+        const y = viewMonth.getFullYear();
+        const mIdx = viewMonth.getMonth();
+        const m = String(mIdx + 1).padStart(2, '0');
+        const monthKey = `${y}-${m}`;
+
+        if (monthCache.has(monthKey)) {
+          if (!cancelled) {
+            setAllGames(monthCache.get(monthKey));
+            setLoadErr(null);
+            setLoading(false);
+          }
+          return;
+        }
+
+        const rows = await fetchMonthScheduleBDL(y, mIdx);
         if (cancelled) return;
+
+        const next = new Map(monthCache);
+        next.set(monthKey, rows);
+        setMonthCache(next);
         setAllGames(rows);
         setLoadErr(null);
 
-        // default month to first month with data (or current)
-        if (rows.length) {
-          const m = rows[0].dateKey.match(/^(\d{4})-(\d{2})-\d{2}$/);
-          if (m) {
-            const firstMonth = new Date(Number(m[1]), Number(m[2]) - 1, 1);
-            setViewMonth(firstMonth);
-            setSelectedDate(firstMonth);
-          }
+        // ensure selectedDate is inside the month
+        const firstDay = new Date(y, mIdx, 1);
+        setSelectedDate(firstDay);
+      } catch (e) {
+        if (!cancelled){
+          setLoadErr(e?.message || String(e));
+          setAllGames([]);
         }
-      }catch(e){
-        if (!cancelled){ setLoadErr(e?.message || String(e)); setAllGames([]); }
-      }finally{
+      } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return ()=>{ cancelled=true; };
-  },[]);
+  }, [viewMonth, monthCache]);
 
-  // month days & events
+    // Group a month's rows by YYYY-MM-DD and sort within each day
+    function bucketByDayAll(games){
+    const m = new Map();
+    for (const g of games || []) {
+        const k = g?.dateKey;
+        if (!k) continue;
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(g);
+    }
+    // stable sort within a day by ISO (time if present), then by home name
+    for (const arr of m.values()) {
+        arr.sort((a,b)=>
+        String(a._iso||"").localeCompare(String(b._iso||"")) ||
+        String(a.home?.name||"").localeCompare(String(b.home?.name||""))
+        );
+    }
+    return m;
+    }
+
+  // month days & events (from the currently loaded month's rows)
   const monthDays = useMemo(()=> daysInMonth(viewMonth.getFullYear(), viewMonth.getMonth()), [viewMonth]);
   const eventsMap = useMemo(()=>{
     const y = viewMonth.getFullYear();
@@ -527,42 +597,42 @@ export default function AllGamesCalendar(){
 
   return (
     <Box sx={{ mx:'auto', width:'100%', maxWidth: 520, p:1.5 }}>
-        {/* top header (sticky) */}
-        <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
+      {/* top header (sticky) */}
+      <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px:1.5 }}>
-            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth:0 }}>
-                <Typography
-                variant="h6"
-                sx={{
-                    fontFamily: '"Bebas Neue", sans-serif',
-                    fontSize: { xs: 26, sm: 32 },
-                    letterSpacing: 1,
-                    fontWeight: 400
-                }}
-                >
-                Pivt
-                </Typography>
+          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth:0 }}>
+            <Typography
+              variant="h6"
+              sx={{
+                fontFamily: '"Bebas Neue", sans-serif',
+                fontSize: { xs: 26, sm: 32 },
+                letterSpacing: 1,
+                fontWeight: 400
+              }}
+            >
+              Pivt
+            </Typography>
 
             <Divider orientation="vertical" flexItem sx={{ opacity:0.2 }} />
 
             <Stack direction="row" spacing={1} alignItems="center">
-                <CalendarMonthIcon fontSize="small" />
-                <Typography variant="subtitle1" sx={{ fontWeight:700 }} noWrap>
+              <CalendarMonthIcon fontSize="small" />
+              <Typography variant="subtitle1" sx={{ fontWeight:700 }} noWrap>
                 {headerMonth}
-                </Typography>
+              </Typography>
             </Stack>
-            </Stack>
+          </Stack>
 
-            <Stack direction="row" spacing={0.5}>
+          <Stack direction="row" spacing={0.5}>
             <IconButton size="small" onClick={()=>{ const n=addMonths(viewMonth,-1); setViewMonth(n); setSelectedDate(n); }}>
-                <ChevronLeftIcon fontSize="small" />
+              <ChevronLeftIcon fontSize="small" />
             </IconButton>
             <IconButton size="small" onClick={()=>{ const n=addMonths(viewMonth, 1); setViewMonth(n); setSelectedDate(n); }}>
-                <ChevronRightIcon fontSize="small" />
+              <ChevronRightIcon fontSize="small" />
             </IconButton>
-            </Stack>
+          </Stack>
         </Stack>
-        </Box>
+      </Box>
 
       {/* horizontal day strip */}
       <Box
