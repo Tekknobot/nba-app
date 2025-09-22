@@ -188,16 +188,30 @@ async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
 
     for (const g of data) {
       if (g?.postseason) continue; // regular season only
-      const dateISO = (g?.date || "").slice(0,10); // YYYY-MM-DD
+
+      const dateISO = (g?.date || "").slice(0, 10); // YYYY-MM-DD
       if (!dateISO) continue;
 
       const homeName = g?.home_team?.full_name || g?.home_team?.name || g?.home_team?.abbreviation;
       const awayName = g?.visitor_team?.full_name || g?.visitor_team?.name || g?.visitor_team?.abbreviation;
       if (!homeName || !awayName) continue;
 
+      // If balldontlie provides a real tip time, use it.
+      // Treat as "hasClock" when the UTC hour isn't 00:00 (midnight placeholder).
+      const raw = g?.date ? new Date(g.date) : null;
+      const hasClock = !!(raw && !Number.isNaN(raw.getTime()) && raw.getUTCHours() !== 0);
+      // Use real ISO when available; otherwise noon UTC to avoid day rollovers in US time zones.
+      const isoFull = hasClock ? raw.toISOString() : `${dateISO}T12:00:00Z`;
+
       rows.push({
-        _iso: `${dateISO}T00:00:00Z`,
+        id: g.id,
+        _iso: isoFull,
         dateKey: dateISO,
+        status: g?.status || "Scheduled",
+        hasClock, // <-- used by UI to decide whether to show a time
+        homeScore: Number.isFinite(g?.home_team_score) ? g.home_team_score : null,
+        awayScore: Number.isFinite(g?.visitor_team_score) ? g.visitor_team_score : null,
+        // keep et as a simple status flag (don't render as time when it's "Scheduled")
         et: (g?.status || "").toLowerCase().includes("scheduled") ? "TBD" : (g?.status || "TBD"),
         seasonStageId: 2,
         home: { name: homeName, code: TEAM_CODE[homeName] || (g?.home_team?.abbreviation || homeName) },
@@ -210,8 +224,22 @@ async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
     page += 1;
   }
 
-  rows.sort((a,b)=> (a._iso||"").localeCompare(b._iso||"") || (a.home?.name||"").localeCompare(b.home?.name||""));
+  rows.sort((a,b)=>
+    (a._iso||"").localeCompare(b._iso||"") ||
+    (a.home?.name||"").localeCompare(b.home?.name||"")
+  );
   return rows;
+}
+
+function dateOnlyLabel(dateKey) {
+  if (!dateKey) return "TBD";
+  // Noon UTC to keep the same calendar date across US time zones
+  const d = new Date(`${dateKey}T12:00:00Z`);
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(d);
 }
 
 /* ========= Probability helpers for the drawer UI ========= */
@@ -402,6 +430,23 @@ function ComparisonDrawer({ open, onClose, game }) {
   );
 }
 
+function isFinal(game){
+  return (game?.status || "").toLowerCase().includes("final");
+}
+
+function resultMeta(game){
+  if (!isFinal(game)) return null;
+  const home = game.home?.code || "HOME";
+  const away = game.away?.code || "AWAY";
+  const hs = game.homeScore ?? 0;
+  const as = game.awayScore ?? 0;
+  const homeWon = hs > as;
+  const label = `${away} ${as} – ${home} ${hs}`;
+  const winner = homeWon ? home : away;
+  return { label, winner, homeWon };
+}
+
+
 /* ========= Mobile UI bits ========= */
 
 /* WeekDay-pill in the horizontal strip */
@@ -463,6 +508,9 @@ function DayPill({ d, selected, count, onClick }) {
 function GameCard({ game, onPick }) {
   const vsLabel = `${game.away.code} @ ${game.home.code}`;
   const sub = `${game.away.name} at ${game.home.name}`;
+
+  const final = resultMeta(game); // uses your helper below
+
   return (
     <Card variant="outlined" sx={{ borderRadius:1 }}>
       <ListItemButton
@@ -476,15 +524,41 @@ function GameCard({ game, onPick }) {
           <Avatar sx={{ width:30, height:30, fontSize:12, bgcolor:'primary.main', color:'primary.contrastText' }}>
             {game.home.code}
           </Avatar>
-          <Box sx={{ flex:1 }}>
-            <Typography variant="body2" sx={{ fontWeight:700 }}>{vsLabel}</Typography>
-            <Typography variant="caption" sx={{ opacity:0.8 }}>{sub}</Typography>
+
+          <Box sx={{ flex:1, minWidth:0 }}>
+            <Typography variant="body2" sx={{ fontWeight:700 }}>
+              {final ? (
+                <>
+                  <span style={{ fontWeight: final.homeWon ? 800 : 600 }}>{game.home.code}</span>
+                  {" vs "}
+                  <span style={{ fontWeight: !final.homeWon ? 800 : 600 }}>{game.away.code}</span>
+                </>
+              ) : (
+                vsLabel
+              )}
+            </Typography>
+            <Typography variant="caption" sx={{ opacity:0.8 }} noWrap>
+              {sub}
+            </Typography>
           </Box>
+
+          {final ? (
+            <Stack direction="row" spacing={0.5}>
+              <Chip size="small" color="success" label="Final" />
+              <Chip size="small" variant="outlined" label={final.label} />
+            </Stack>
+          ) : (
             <Chip
-            size="small"
-            variant="outlined"
-            label={formatGameLabel(game._iso, { mode: "ET" })}
+              size="small"
+              variant="outlined"
+              label={
+                // Show a clock only when we have a real tip time from BDL (hasClock or live statuses)
+                game?.hasClock || /in progress|halftime|final|end of/i.test(game?.status || "")
+                  ? formatGameLabel(game._iso, { mode: "ET", withTZ: true }) // e.g., "7:30 PM EST"
+                  : dateOnlyLabel(game?.dateKey) // or just "TBD"
+              }
             />
+          )}
         </Stack>
       </ListItemButton>
     </Card>

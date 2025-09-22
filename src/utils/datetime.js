@@ -71,18 +71,60 @@ export const timeOnlyET = (iso) => {
   return parts.length >= 2 ? parts[parts.length - 1] : s;
 };
 
-/** Smart label:
- * - If no valid ISO, returns "TBD"
- * - If you want ET league style, set opts.mode = "ET"
- * - Otherwise returns local by default
- */
-export function formatGameLabel(iso, opts = { mode: "local" }) {
+// Force a time-only label with AM/PM (12-hour). Supports ET or local.
+// Usage examples:
+//   formatGameLabel(iso)                               -> "7:30 PM"
+//   formatGameLabel(iso, { mode: "ET" })               -> "7:30 PM EST"
+//   formatGameLabel(iso, { mode: "local", withTZ: true }) -> "7:30 PM PDT"
+export function formatGameLabel(
+  iso,
+  { mode = "local", withTZ = false, uppercaseAmPm = true } = {}
+) {
   if (!iso) return "TBD";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "TBD";
 
-  if (opts.mode === "ET") {
-    return formatISOInZone(iso, "America/New_York");
+  const timeZone = mode === "ET" ? "America/New_York" : undefined;
+
+  // Build parts so we can normalize the AM/PM casing and control TZ text.
+  const parts = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,            // force 12-hour so we always get AM/PM
+    ...(timeZone ? { timeZone } : {}),
+    ...(withTZ ? { timeZoneName: "short" } : {}),
+  }).formatToParts(d);
+
+  let hour = "", minute = "", dayPeriod = "", tz = "";
+  for (const p of parts) {
+    if (p.type === "hour") hour = p.value;
+    else if (p.type === "minute") minute = p.value;
+    else if (p.type === "dayPeriod") dayPeriod = p.value;
+    else if (p.type === "timeZoneName") tz = p.value;
   }
-  return formatISOToLocal(iso);
+
+  // Normalize "p.m." / "PM" variants
+  if (uppercaseAmPm && dayPeriod) {
+    dayPeriod = dayPeriod.replace(/\./g, "").toUpperCase(); // "p.m." -> "PM"
+  }
+
+  const core = `${hour}:${minute} ${dayPeriod}`.trim();
+  return withTZ && tz ? `${core} ${tz}` : core;
+}
+
+
+/** Time-only in local timezone, e.g. "6:00 PM" */
+export function timeOnlyLocal(iso, { withTZ = false, hour12 = true } = {}) {
+  if (!iso) return "TBD";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "TBD";
+
+  const opts = {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12,
+    ...(withTZ ? { timeZoneName: "short" } : {}),
+  };
+
+  return new Intl.DateTimeFormat(undefined, opts).format(d);
 }
