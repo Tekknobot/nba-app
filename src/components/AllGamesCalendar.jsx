@@ -576,11 +576,11 @@ function GameCard({ game, onPick }) {
               <Chip size="small" variant="outlined" label={final.label} />
             </Stack>
           ) : (
-            <Chip
-              size="small"
-              variant="outlined"
-              sx={{ flexShrink: 0, maxWidth: '50vw' }}  // avoid squeezing into text
-              label={
+             <Chip
+                size="small"
+                variant="outlined"
+                sx={{ flexShrink: 0, maxWidth: '50vw', alignSelf: 'center' }}
+                label={
                 game?.hasClock || /in progress|halftime|final|end of/i.test(game?.status || "")
                   ? formatGameLabel(game._iso, { mode: "ET", withTZ: true })
                   : new Intl.DateTimeFormat(undefined,{ weekday:'short', month:'short', day:'numeric'})
@@ -724,7 +724,7 @@ export default function AllGamesCalendar(){
             </Stack>
           </Stack>
 
-          <Stack direction="row" spacing={0.5}>
+          <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignSelf: 'center' }}>
             <IconButton size="small" onClick={()=>{ const n=addMonths(viewMonth,-1); setViewMonth(n); setSelectedDate(n); }}>
               <ChevronLeftIcon fontSize="small" />
             </IconButton>
