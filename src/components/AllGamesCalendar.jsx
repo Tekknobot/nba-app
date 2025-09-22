@@ -158,16 +158,16 @@ function monthRange(year, month /* 0-11 */){
   return { start: fmt(start), end: fmt(end) };
 }
 
-// Returns rows shaped like your JSON loader did: {_iso,dateKey,et,home:{name,code},away:{...}}
+// Robust month fetch: follows meta.next_page and de-dupes by id
 async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
   const { start, end } = monthRange(year, month);
   const headers = {};
   const key = process.env.REACT_APP_BDL_API_KEY;
   if (key) headers["Authorization"] = key;
 
-  let page = 1;
   const per_page = 100;
-  const rows = [];
+  let page = 1;
+  const byId = new Map(); // dedupe
 
   while (true) {
     const params = new URLSearchParams({
@@ -179,12 +179,13 @@ async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
 
     const url = `https://api.balldontlie.io/v1/games?${params.toString()}`;
     const res = await fetch(url, { headers });
-    if (res.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (res.status === 401)
+      throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
     if (!res.ok) throw new Error(`BDL HTTP ${res.status}`);
 
     const json = await res.json();
     const data = Array.isArray(json?.data) ? json.data : [];
-    if (!data.length) break;
+    const nextPage = json?.meta?.next_page || null;
 
     for (const g of data) {
       if (g?.postseason) continue; // regular season only
@@ -196,22 +197,19 @@ async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
       const awayName = g?.visitor_team?.full_name || g?.visitor_team?.name || g?.visitor_team?.abbreviation;
       if (!homeName || !awayName) continue;
 
-      // If balldontlie provides a real tip time, use it.
-      // Treat as "hasClock" when the UTC hour isn't 00:00 (midnight placeholder).
+      // detect whether BDL provided a real tip time (non-midnight UTC)
       const raw = g?.date ? new Date(g.date) : null;
       const hasClock = !!(raw && !Number.isNaN(raw.getTime()) && raw.getUTCHours() !== 0);
-      // Use real ISO when available; otherwise noon UTC to avoid day rollovers in US time zones.
-      const isoFull = hasClock ? raw.toISOString() : `${dateISO}T12:00:00Z`;
+      const isoFull = hasClock ? raw.toISOString() : `${dateISO}T12:00:00Z`; // noon fallback to avoid date slip
 
-      rows.push({
+      byId.set(g.id, {
         id: g.id,
         _iso: isoFull,
         dateKey: dateISO,
         status: g?.status || "Scheduled",
-        hasClock, // <-- used by UI to decide whether to show a time
+        hasClock,
         homeScore: Number.isFinite(g?.home_team_score) ? g.home_team_score : null,
         awayScore: Number.isFinite(g?.visitor_team_score) ? g.visitor_team_score : null,
-        // keep et as a simple status flag (don't render as time when it's "Scheduled")
         et: (g?.status || "").toLowerCase().includes("scheduled") ? "TBD" : (g?.status || "TBD"),
         seasonStageId: 2,
         home: { name: homeName, code: TEAM_CODE[homeName] || (g?.home_team?.abbreviation || homeName) },
@@ -219,14 +217,15 @@ async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
       });
     }
 
-    const totalPages = json?.meta?.total_pages ?? 1;
-    if (page >= totalPages) break;
-    page += 1;
+    if (!nextPage) break;
+    page = nextPage;
   }
 
-  rows.sort((a,b)=>
-    (a._iso||"").localeCompare(b._iso||"") ||
-    (a.home?.name||"").localeCompare(b.home?.name||"")
+  const rows = Array.from(byId.values());
+  rows.sort(
+    (a, b) =>
+      (a._iso || "").localeCompare(b._iso || "") ||
+      (a.home?.name || "").localeCompare(b.home?.name || "")
   );
   return rows;
 }
