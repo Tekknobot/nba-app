@@ -7,6 +7,26 @@ const { XMLParser } = require("fast-xml-parser");
 // --- tiny utils ---
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// --- DROP-IN (api/news.js): simple injury detector ---
+function detectInjury(text) {
+  if (!text) return { isInjury: false, hits: [] };
+  const hay = text.toLowerCase();
+
+  // Core keywords and phrases seen in NBA injury headlines
+  const terms = [
+    "injury", "injured", "out for season", "out for the season", "out indefinitely",
+    "questionable", "probable", "doubtful", "day-to-day", "day to day",
+    "ruled out", "sidelined", "setback", "return timetable", "status update",
+    "mri", "x-ray", "xray", "fracture", "broken", "sprain", "strain", "tear",
+    "acl", "mcl", "pcl", "lcl", "meniscus", "achilles", "concussion",
+    "hamstring", "calf", "quad", "groin", "knee", "ankle", "foot", "wrist",
+    "hand", "thumb", "finger", "elbow", "shoulder", "hip", "back"
+  ];
+
+  const hits = terms.filter(t => hay.includes(t));
+  return { isInjury: hits.length > 0, hits };
+}
+
 async function fetchWithTimeout(url, ms, headers) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), ms);
@@ -58,13 +78,22 @@ async function fetchFeed(feed, parser, ua) {
     const he = require("he");
 
     return arr
-    .map((it) => ({
-        title: it?.title ? he.decode(it.title) : "",
+    .map((it) => {
+        const title = it?.title ? he.decode(it.title) : "";
+        const desc  = it?.description ? he.decode(String(it.description)) : "";
+        const { isInjury, hits } = detectInjury(`${title} ${desc}`); // check title+desc
+
+        return {
+        title,
         link: it?.link || it?.guid || "",
         pubDate: it?.pubDate || it?.published || it?.updated || "",
         source: feed.source,
-    }))
+        isInjury,
+        injuryHits: hits, // optional: useful for debugging/analytics
+        };
+    })
     .filter((x) => x.title && x.link);
+
 
   } catch (e) {
     console.warn(`[news] ${feed.source} fetch error: ${e?.name || ""} ${e?.message || e}`);

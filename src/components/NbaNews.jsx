@@ -27,6 +27,15 @@ export default function NbaNews() {
         const r = await fetch(`${API_BASE}/api/news`, { cache: "no-store" });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
+        
+        const itemsArr = Array.isArray(json?.items) ? json.items : [];
+        // Injuries first, then recency
+        itemsArr.sort((a, b) => {
+        if (a.isInjury !== b.isInjury) return a.isInjury ? -1 : 1;
+        return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
+        });
+        if (!cancel) setItems(itemsArr);
+
         if (!cancel) setItems(Array.isArray(json?.items) ? json.items : []);
       } catch (e) {
         if (!cancel) setErr(e?.message || String(e));
@@ -60,12 +69,21 @@ export default function NbaNews() {
                       {it.title}
                     </Link>
                   }
-                  secondary={
-                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.25 }}>
-                      <Chip size="small" variant="outlined" label={it.source} />
-                      <Typography variant="caption" sx={{ opacity: 0.7 }}>{timeAgo(it.pubDate)}</Typography>
+                    secondary={
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.25, flexWrap: 'wrap' }}>
+                        <Chip size="small" variant="outlined" label={it.source} />
+                        {it.isInjury && (
+                        <Chip
+                            size="small"
+                            label="Injury"
+                            color="error"
+                            variant="filled"
+                            sx={{ ml: 0.5 }}
+                        />
+                        )}
+                        <Typography variant="caption" sx={{ opacity: 0.7 }}>{timeAgo(it.pubDate)}</Typography>
                     </Stack>
-                  }
+                    }
                 />
               </ListItem>
             ))}
