@@ -3,6 +3,11 @@ const express = require("express");
 const fetch = (...args) => import("node-fetch").then(m => m.default(...args));
 
 const app = express();
+
+// --- DROP-IN (server/index.js): enable CORS for production ---
+const cors = require("cors");
+app.use(cors({ origin: true })); // or replace 'true' with your exact frontend origin string
+
 const PORT = process.env.PORT || 5001;
 
 const { XMLParser } = require("fast-xml-parser");

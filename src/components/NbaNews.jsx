@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { Card, CardContent, Typography, List, ListItem, ListItemText, Chip, Stack, Link, Divider } from "@mui/material";
 
+// --- DROP-IN IMPORT (top of src/components/NbaNews.jsx) ---
+import { API_BASE } from "../api/base";
+
 function timeAgo(ts) {
   const t = ts ? new Date(ts).getTime() : 0;
   if (!t) return "";
@@ -21,7 +24,7 @@ export default function NbaNews() {
     let cancel = false;
     (async () => {
       try {
-        const r = await fetch("/api/news", { cache: "no-store" });
+        const r = await fetch(`${API_BASE}/api/news`, { cache: "no-store" });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
         if (!cancel) setItems(Array.isArray(json?.items) ? json.items : []);
