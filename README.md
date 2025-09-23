@@ -1,19 +1,4 @@
-# NBA Calendar (Full Project)
+# NBA Calendar
 
-## Dev
-```bash
-npm i
-npm run dev
-```
-- Runs CRA on :3000 and Express on :5000. CRA proxies `/api/nba/schedule` to the server.
-
-## Build-time fallback
-We also fetch a copy of the schedule into `public/nba-schedule.json` before `build`:
-- It’s used only if the server/CDN are unreachable.
-
-## Prod
-```bash
-npm run build
-NODE_ENV=production npm run server
-```
-- Serves the build and the API from the same origin.
+A clean, mobile-friendly NBA schedule and matchup helper.  
+Browse games by date, see team last-10 results, and get simple win probability insights.
