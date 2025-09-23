@@ -5,6 +5,8 @@ const fetch = (...args) => import("node-fetch").then(m => m.default(...args));
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+const { XMLParser } = require("fast-xml-parser");
+
 /** UI -> BBR codes (note BRK/CHO/PHO) */
 const UI_TO_BBR = {
   ATL:"ATL", BOS:"BOS", BKN:"BRK", BRK:"BRK",
@@ -165,6 +167,106 @@ app.get("/api/last10/:code", async (req, res) => {
     res.status(500).json({ error: e?.message || String(e) });
   }
 });
+
+// --- NBA News feed proxy (no auth) with timeouts + cache ---
+const NBA_FEEDS = [
+  { source: "ESPN",  url: "https://www.espn.com/espn/rss/nba/news" },
+  { source: "Yahoo", url: "https://sports.yahoo.com/nba/rss.xml" },
+  { source: "CBS",   url: "https://www.cbssports.com/rss/headlines/nba/" },
+];
+
+const newsCacheKey = "NEWS";
+const NEWS_TTL_MS = 10 * 60 * 1000; // 10 min
+
+app.get("/news", async (req, res) => {
+  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
+  const UA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36";
+
+  // Serve fresh cache immediately if available
+  const cached = getCache(newsCacheKey);
+  if (cached) {
+    res.set("Cache-Control", "public, max-age=60");
+    return res.json(cached);
+  }
+
+  // Small helper: fetch with timeout (per feed)
+  async function fetchWithTimeout(url, ms, headers) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), ms);
+    try {
+      const r = await fetch(url, { headers, signal: controller.signal });
+      return r;
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
+  async function fetchFeed(feed) {
+    try {
+      const r = await fetchWithTimeout(feed.url, 4000, { "User-Agent": UA });
+      if (!r.ok) {
+        console.warn(`[news] ${feed.source} http ${r.status}`);
+        return [];
+      }
+      const xml = await r.text();
+      let json;
+      try {
+        json = parser.parse(xml);
+      } catch (e) {
+        console.warn(`[news] ${feed.source} parse error: ${e?.message || e}`);
+        return [];
+      }
+      const items = json?.rss?.channel?.item || [];
+      const arr = Array.isArray(items) ? items : [items];
+
+      return arr
+        .map(it => ({
+          title: it?.title || "",
+          link: it?.link || it?.guid || "",
+          pubDate: it?.pubDate || it?.published || it?.updated || "",
+          source: feed.source,
+        }))
+        .filter(x => x.title && x.link);
+    } catch (e) {
+      console.warn(`[news] ${feed.source} fetch error: ${e?.name || ""} ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  try {
+    // Fetch in parallel; each feed has its own timeout
+    const results = await Promise.all(NBA_FEEDS.map(fetchFeed));
+    const flat = results.flat();
+
+    // If nothing came back, try serving stale cache (if any)
+    if (!flat.length) {
+      const stale = getCache(newsCacheKey); // will be null if expired/empty
+      if (stale) {
+        res.set("Cache-Control", "public, max-age=30");
+        return res.json(stale);
+      }
+      // Return empty gracefully (avoid 5xx so UI doesn't show "error")
+      return res.json({ items: [] });
+    }
+
+    // Sort newest first, limit
+    flat.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
+    const payload = { items: flat.slice(0, 25) };
+
+    // Cache fresh result
+    setCache(newsCacheKey, payload);
+    res.set("Cache-Control", "public, max-age=60");
+    return res.json(payload);
+  } catch (e) {
+    console.error("NEWS ERR (outer):", e);
+    // Try stale cache on unexpected errors
+    const stale = getCache(newsCacheKey);
+    if (stale) return res.json(stale);
+    return res.json({ items: [] });
+  }
+});
+
 
 /* -------- start -------- */
 app.listen(PORT, () => {

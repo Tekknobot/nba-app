@@ -10,6 +10,7 @@ import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CloseIcon from "@mui/icons-material/Close";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import "@fontsource/bebas-neue"; // defaults to 400 weight
+
 import {
   summarizeLastNGames,
   daysRestBefore,
@@ -17,6 +18,7 @@ import {
   computeGameProbabilities,
   explainFactors,
 } from "../utils/probability";
+
 import {
   formatISOToLocal,
   formatISOInZone,
@@ -25,6 +27,8 @@ import {
   timeOnlyET,
   formatGameLabel,
 } from "../utils/datetime";
+
+import NbaNews from "./NbaNews";
 
 /* ========= small date helpers ========= */
 function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
@@ -802,6 +806,8 @@ export default function AllGamesCalendar(){
 
       {/* comparison drawer */}
       <ComparisonDrawer open={compareOpen} onClose={()=> setCompareOpen(false)} game={compareGame} />
+      {/* news below everything */}
+      <NbaNews />        
     </Box>
   );
 }

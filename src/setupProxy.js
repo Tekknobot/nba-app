@@ -54,4 +54,14 @@ module.exports = function (app) {
       },
     })
   );
+
+    // C) Local backend: forward /api/* to your Express server on :5001
+    app.use(
+    '/api',
+    createProxyMiddleware({
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        logLevel: 'silent', // 'debug' if you want logs
+    })
+    );
 };
