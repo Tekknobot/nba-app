@@ -61,7 +61,8 @@ module.exports = function (app) {
     createProxyMiddleware({
         target: 'http://localhost:5001',
         changeOrigin: true,
-        logLevel: 'silent', // 'debug' if you want logs
+        logLevel: 'silent', // 'debug' to inspect
     })
     );
+
 };
