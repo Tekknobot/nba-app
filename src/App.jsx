@@ -3,14 +3,18 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Box } from "@mui/material";
 import AllGamesCalendar from "./components/AllGamesCalendar";
+import About from "./components/About";
+import Header from "./components/Header";
 
 export default function App(){
   return (
     <BrowserRouter>
+      <Header />
       <Box sx={{ p:2 }}>
         <Routes>
           <Route path="/" element={<Navigate to="/all" replace />} />
           <Route path="/all" element={<AllGamesCalendar />} />
+          <Route path="/about" element={<About />} />
         </Routes>
       </Box>
     </BrowserRouter>
