@@ -54,14 +54,18 @@ async function fetchFeed(feed, parser, ua) {
     const items = json?.rss?.channel?.item || [];
     const arr = Array.isArray(items) ? items : [items];
 
+    // helper to decode HTML entities
+    const he = require("he");
+
     return arr
-      .map((it) => ({
-        title: it?.title || "",
+    .map((it) => ({
+        title: it?.title ? he.decode(it.title) : "",
         link: it?.link || it?.guid || "",
         pubDate: it?.pubDate || it?.published || it?.updated || "",
         source: feed.source,
-      }))
-      .filter((x) => x.title && x.link);
+    }))
+    .filter((x) => x.title && x.link);
+
   } catch (e) {
     console.warn(`[news] ${feed.source} fetch error: ${e?.name || ""} ${e?.message || e}`);
     return [];
