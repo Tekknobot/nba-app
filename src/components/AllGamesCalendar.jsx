@@ -701,18 +701,32 @@ export default function AllGamesCalendar(){
       <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px:1.5 }}>
           <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth:0 }}>
+            <Box sx={{ lineHeight: 1 }}>
             <Typography
-              variant="h6"
-              sx={{
+                variant="h6"
+                sx={{
                 fontFamily: '"Bebas Neue", sans-serif',
                 fontSize: { xs: 26, sm: 32 },
                 letterSpacing: 1,
                 fontWeight: 400
-              }}
+                }}
             >
-              Pivt
+                PIVT
             </Typography>
-
+            <Typography
+                variant="caption"
+                sx={{
+                opacity: 0.75,
+                display: 'block',
+                mt: -0.25,
+                maxWidth: 280,          // tweak as you like
+                whiteSpace: 'normal',   // allow wrapping
+                wordBreak: 'break-word' // break long words if needed
+                }}
+            >
+                NBA calendar & matchup helper.
+            </Typography>
+            </Box>
             <Divider orientation="vertical" flexItem sx={{ opacity:0.2 }} />
 
             <Stack direction="row" spacing={1} alignItems="center">
