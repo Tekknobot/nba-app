@@ -55,14 +55,34 @@ module.exports = function (app) {
     })
   );
 
-    // C) Local backend: forward /api/* to your Express server on :5001
-    app.use(
+  // C) Local backend: forward /api/* to your Express server on :5001
+  // Hardened: adds timeouts and JSON fallback on proxy errors (prevents 504 HTML)
+  app.use(
     '/api',
     createProxyMiddleware({
-        target: 'http://localhost:5001',
-        changeOrigin: true,
-        logLevel: 'silent', // 'debug' to inspect
+      target: 'http://localhost:5001',
+      changeOrigin: true,
+      logLevel: 'silent', // 'debug' to inspect
+      timeout: 15000,       // client -> proxy timeout
+      proxyTimeout: 15000,  // proxy -> target timeout
+      onProxyReq(proxyReq) {
+        proxyReq.setHeader('Accept', 'application/json');
+        proxyReq.setHeader('Connection', 'keep-alive');
+      },
+      onProxyRes(proxyRes) {
+        // ensure JSON-ish headers when possible and disable caching in dev
+        proxyRes.headers['cache-control'] = 'no-store';
+        if (!('content-type' in proxyRes.headers)) {
+          proxyRes.headers['content-type'] = 'application/json; charset=utf-8';
+        }
+      },
+      onError(err, req, res) {
+        // Return JSON instead of a 504/HTML error page
+        try {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ items: [], error: 'proxy_error', detail: String(err && err.message || err) }));
+        } catch { /* ignore */ }
+      },
     })
-    );
-
+  );
 };

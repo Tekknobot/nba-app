@@ -98,6 +98,97 @@ function buildHeaders(refererUrl) {
   };
 }
 
+// drop-in: tiny helper
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// drop-in: overall route timeout guard (wraps an async handler)
+function withRouteTimeout(handler, ms = 5500) {
+  return async (req, res) => {
+    const to = new Promise(resolve => {
+      setTimeout(() => resolve({ __timeout: true }), ms);
+    });
+
+    try {
+      const result = await Promise.race([handler(req, res), to]);
+      if (result && result.__timeout) {
+        // Serve stale cache or empty payload on timeout (prevents 504 from proxies)
+        const stale = getNewsCache?.("NEWS", 10 * 60 * 1000); // ok if undefined elsewhere
+        res.status(200).type("application/json; charset=utf-8");
+        if (stale) return res.json(stale);
+        return res.json({ items: [], error: "timeout" });
+      }
+    } catch (e) {
+      // Fallback to JSON error, not a proxy-level 504
+      const stale = getNewsCache?.("NEWS", 10 * 60 * 1000);
+      res.status(200).type("application/json; charset=utf-8");
+      if (stale) return res.json(stale);
+      return res.json({ items: [], error: "route_error" });
+    }
+  };
+}
+
+// drop-in: per-request timeout + retryable fetch helper
+async function fetchWithTimeout(url, ms, headers) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  try {
+    const r = await fetch(url, { headers, signal: controller.signal });
+    return r;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+async function fetchWithRetry(url, { headers = {}, timeoutMs = 3500, retries = 1, backoffMs = 400 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetchWithTimeout(url, timeoutMs, headers);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < retries) await sleep(backoffMs * Math.pow(2, attempt));
+    }
+  }
+  throw lastErr;
+}
+
+// drop-in: hardened single-feed fetcher with retry (use instead of your current fetchFeed)
+async function fetchFeed(feed, parser, ua) {
+  try {
+    const r = await fetchWithRetry(feed.url, {
+      headers: { "User-Agent": ua },
+      timeoutMs: 3500,   // per-feed timeout
+      retries: 2,        // retry twice on timeouts/5xx
+      backoffMs: 300
+    });
+
+    const xml = await r.text();
+    let json;
+    try {
+      json = parser.parse(xml);
+    } catch (e) {
+      console.warn(`[news] ${feed.source} parse error: ${e?.message || e}`);
+      return [];
+    }
+    const items = json?.rss?.channel?.item || [];
+    const arr = Array.isArray(items) ? items : [items];
+
+    return arr
+      .map(it => ({
+        title: it?.title || "",
+        link: it?.link || it?.guid || "",
+        pubDate: it?.pubDate || it?.published || it?.updated || "",
+        source: feed.source,
+      }))
+      .filter(x => x.title && x.link);
+  } catch (e) {
+    console.warn(`[news] ${feed.source} fetch error: ${e?.name || ""} ${e?.message || e}`);
+    return [];
+  }
+}
+
 async function fetchCsvDirect(bbrCode, season) {
   const csvUrl  = `https://widgets.sports-reference.com/w/bbr_teams_games.cgi?team=${bbrCode}&year=${season}`;
   const referer = `https://www.basketball-reference.com/teams/${bbrCode}/${season}_games.html`;
@@ -238,7 +329,32 @@ async function fetchFeed(feed, parser, ua) {
   }
 }
 
-// --- register the /api/news route ---
+// --- optional: strict JSON guards for /api/* ---
+function registerJsonApiGuards(app) {
+  app.use('/api', (req, res, next) => {
+    res.type('application/json; charset=utf-8');
+    next();
+  });
+
+  app.use('/api/news', (req, res, next) => {
+    if (req.method !== 'GET') {
+      return res.status(405).json({ items: [], error: 'method_not_allowed' });
+    }
+    next();
+  });
+
+  app.use('/api', (req, res, _next) => {
+    return res.status(404).json({ error: 'not_found' });
+  });
+
+  app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    if (res.headersSent) return next(err);
+    res.status(500).json({ items: [], error: 'internal_error' });
+  });
+}
+
+// drop-in: registerNewsRoute with overall timeout wrapper (replace your current registerNewsRoute)
 function registerNewsRoute(app) {
   const NBA_FEEDS = [
     { source: "ESPN",  url: "https://www.espn.com/espn/rss/nba/news" },
@@ -251,16 +367,17 @@ function registerNewsRoute(app) {
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36";
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
 
-  app.get("/api/news", async (req, res) => {
-    res.type("application/json; charset=utf-8");
+  app.get(
+    "/api/news",
+    withRouteTimeout(async (req, res) => {
+      res.type("application/json; charset=utf-8");
 
-    const cached = getNewsCache(newsCacheKey, NEWS_TTL_MS);
-    if (cached) {
-      res.set("Cache-Control", "public, max-age=60");
-      return res.status(200).json(cached);
-    }
+      const cached = getNewsCache(newsCacheKey, NEWS_TTL_MS);
+      if (cached) {
+        res.set("Cache-Control", "public, max-age=60");
+        return res.status(200).json(cached);
+      }
 
-    try {
       const results = await Promise.all(NBA_FEEDS.map(f => fetchFeed(f, parser, UA)));
       const flat = results.flat();
 
@@ -279,23 +396,13 @@ function registerNewsRoute(app) {
       setNewsCache(newsCacheKey, payload);
       res.set("Cache-Control", "public, max-age=60");
       return res.status(200).json(payload);
-    } catch (e) {
-      console.error("NEWS ERR (outer):", e);
-      const stale = getNewsCache(newsCacheKey, NEWS_TTL_MS);
-      if (stale) return res.status(200).json(stale);
-      return res.status(200).json({ items: [] });
-    }
-  });
-
-  // fallback error guard
-  app.use((err, req, res, next) => {
-    console.error("Unhandled error:", err);
-    if (res.headersSent) return next(err);
-    res.status(500).type("application/json; charset=utf-8").json({ items: [], error: "internal_error" });
-  });
+    }, 5500) // overall route budget; ensures we return before proxies 504
+  );
 }
 
+// register routes/guards
 registerNewsRoute(app);
+registerJsonApiGuards(app);
 
 /* -------- start -------- */
 app.listen(PORT, () => {
