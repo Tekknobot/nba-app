@@ -438,19 +438,41 @@ function ProbabilityCard({ probs, homeCode, awayCode }) {
 }
 
 // --- DROP-IN: single player stat "pill" ---
-function PlayerPill({ avg }) {
+function PlayerPill({ avg, accent = 'primary.main' }) {
   const name = displayName(avg.player, avg.player_id);
   const iv = initials(avg?.player?.first_name, avg?.player?.last_name);
 
   return (
     <Chip
-      avatar={<Avatar sx={{ width: 22, height: 22, fontSize: 12, bgcolor: 'primary.main', color: 'primary.contrastText' }}>{iv}</Avatar>}
+      avatar={
+        <Avatar
+          sx={{
+            width: 22,
+            height: 22,
+            fontSize: 12,
+            // darker text, light bg, subtle outline in team accent
+            bgcolor: (t) => t.palette.action.hover,
+            color: (t) => t.palette.text.primary,
+            border: '2px solid',
+            borderColor: accent,
+          }}
+        >
+          {iv}
+        </Avatar>
+      }
       label={
         <Box sx={{ display: 'inline-flex', gap: 1, alignItems: 'baseline' }}>
           <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1 }}>
             {name}
           </Typography>
-          <Typography variant="caption" sx={{ opacity: 0.9, lineHeight: 1 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              opacity: 0.9,
+              lineHeight: 1,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', // steadier numbers
+            }}
+          >
             {nf1(avg.pts)} PTS · {nf1(avg.reb)} REB · {nf1(avg.ast)} AST
           </Typography>
         </Box>
@@ -726,24 +748,76 @@ function ComparisonDrawer({ open, onClose, game }) {
                 <Typography variant="caption" color="warning.main">Averages error: {mini.error}</Typography>
                 ) : mini.data ? (
                 <Stack spacing={1.25}>
-                    {/* Away */}
-                    <Stack direction="row" alignItems="center" spacing={1}>
-                    <Chip size="small" variant="outlined" label={game?.away?.code} sx={{ minWidth: 56, justifyContent: 'center' }} />
-                    <Stack direction="row" spacing={1} sx={{ flexWrap:'wrap', rowGap: 1 }}>
-                    {mini.data.away.map((p) => (
-                        <PlayerPill key={`a-${p.player_id}`} avg={p} />
-                    ))}
-                    </Stack>
-                    </Stack>
-                    {/* Home */}
-                    <Stack direction="row" alignItems="center" spacing={1}>
-                    <Chip size="small" variant="outlined" label={game?.home?.code} sx={{ minWidth: 56, justifyContent: 'center' }} />
-                    <Stack direction="row" spacing={1} sx={{ flexWrap:'wrap', rowGap: 1 }}>
-                    {mini.data.home.map((p) => (
-                        <PlayerPill key={`h-${p.player_id}`} avg={p} />
-                    ))}
-                    </Stack>
-                    </Stack>
+                    {/* Away group */}
+                    {(() => {
+                    const accent = (t) => t.palette.info.main; // away color
+                    return (
+                        <Stack direction="row" alignItems="flex-start" spacing={1}>
+                        <Chip
+                            size="small"
+                            variant="outlined"
+                            label={game?.away?.code}
+                            sx={{
+                            minWidth: 56,
+                            justifyContent: 'center',
+                            borderColor: accent,
+                            color: accent,
+                            }}
+                        />
+                        <Box
+                            sx={{
+                            flex: 1,
+                            pl: 1.5,
+                            mt: 0.25,
+                            borderLeft: '3px solid',
+                            borderColor: accent,
+                            }}
+                        >
+                            <Stack direction="column" spacing={1} sx={{ '& > *': { maxWidth: '100%' } }}>
+                            {mini.data.away.map((p) => (
+                                <PlayerPill key={`a-${p.player_id}`} avg={p} accent={accent} />
+                            ))}
+                            </Stack>
+                        </Box>
+                        </Stack>
+                    );
+                    })()}
+
+                    {/* Home group */}
+                    {(() => {
+                    const accent = (t) => t.palette.success.main; // home color
+                    return (
+                        <Stack direction="row" alignItems="flex-start" spacing={1}>
+                        <Chip
+                            size="small"
+                            variant="outlined"
+                            label={game?.home?.code}
+                            sx={{
+                            minWidth: 56,
+                            justifyContent: 'center',
+                            borderColor: accent,
+                            color: accent,
+                            }}
+                        />
+                        <Box
+                            sx={{
+                            flex: 1,
+                            pl: 1.5,
+                            mt: 0.25,
+                            borderLeft: '3px solid',
+                            borderColor: accent,
+                            }}
+                        >
+                            <Stack direction="column" spacing={1} sx={{ '& > *': { maxWidth: '100%' } }}>
+                            {mini.data.home.map((p) => (
+                                <PlayerPill key={`h-${p.player_id}`} avg={p} accent={accent} />
+                            ))}
+                            </Stack>
+                        </Box>
+                        </Stack>
+                    );
+                    })()}
+
                 </Stack>
                 ) : null}
             </AccordionDetails>
