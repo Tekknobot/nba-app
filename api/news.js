@@ -7,13 +7,25 @@ const { XMLParser } = require("fast-xml-parser");
 // --- tiny utils ---
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// --- DROP-IN (api/news.js): simple injury detector ---
+// --- DROP-IN (api/news.js): boundary-safe injury detector with negatives ---
 function detectInjury(text) {
   if (!text) return { isInjury: false, hits: [] };
-  const hay = text.toLowerCase();
+  const hay = String(text).toLowerCase();
 
-    // Core keywords and phrases seen in NBA injury headlines
-    const terms = [
+  // Block obvious non-injury jersey/throwback content
+  const NEGATIVES = [
+    /\bthrowback\b/i,
+    /\bbringing? back\b/i,
+    /\bcome(?:back|s back)\b/i,
+    /\bclassic (?:jersey|uniform|edition)\b/i,
+    /\b(?:jersey|uniform|kit|hardwood classic|court (?:design|reveal))\b/i,
+  ];
+  for (const n of NEGATIVES) {
+    if (n.test(hay)) return { isInjury: false, hits: ['NEGATIVE'] };
+  }
+
+  // Your curated terms
+  const terms = [
     "injury", "injured", 
     "out for season", "season-ending", "out indefinitely",
     "day-to-day", "day to day", "game-time decision",
@@ -28,9 +40,20 @@ function detectInjury(text) {
     "hamstring", "calf", "quad", "groin", "knee", "ankle",
     "foot", "toe", "wrist", "hand", "thumb", "finger",
     "elbow", "shoulder", "hip"
-    ];
+  ];
 
-  const hits = terms.filter(t => hay.includes(t));
+  // Build boundary-safe regex for each term:
+  // (^|\W)TERM($|\W) ensures no match inside longer words (e.g., "Philadelphia")
+  const patterns = terms.map((t) => {
+    const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|\\W)${esc}($|\\W)`, "i");
+  });
+
+  const hits = [];
+  for (const re of patterns) {
+    if (re.test(hay)) hits.push(re.source);
+  }
+
   return { isInjury: hits.length > 0, hits };
 }
 
