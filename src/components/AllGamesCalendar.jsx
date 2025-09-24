@@ -478,7 +478,7 @@ function ComparisonDrawer({ open, onClose, game }) {
     return () => { cancelled = true; };
     }, [open, game?.home?.code, game?.away?.code]);
 
-    // fetch mini-averages for both teams (top players by minutes)
+    // fetch mini-averages for both teams (top players by minutes) — via Vercel proxy
     useEffect(() => {
     if (!open || !game?.home?.code || !game?.away?.code) return;
     let cancelled = false;
@@ -487,49 +487,64 @@ function ComparisonDrawer({ open, onClose, game }) {
         try {
         setMini({ loading: true, error: null, data: null });
 
-        // Free tier note: roster (players) is OK; stats/averages are not.
+        // 1) rosters (OK on free/GOAT; we use BDL player IDs from here)
         const [awayRoster, homeRoster] = await Promise.all([
             fetchTeamRosterByTeamIdBDL(game.away.code),
             fetchTeamRosterByTeamIdBDL(game.home.code),
         ]);
         if (cancelled) return;
 
-        // Attempt averages (will 401 on free tier)
-        const awayIds = awayRoster.map(p => p.id).slice(0, 30);
-        const homeIds = homeRoster.map(p => p.id).slice(0, 30);
+        // 2) normalize & cap to keep payload small
+        const normIds = (arr) =>
+            Array.from(new Set((arr || [])
+            .map(p => Number(p?.id))
+            .filter(n => Number.isInteger(n) && n > 0)))
+            .slice(0, 30);
 
-        const fetchAverages = async (ids) => {
-            try {
-            return await fetchSeasonAveragesBatchBDL(ids);
-            } catch (e) {
-            // If the API says unauthorized/forbidden, treat as locked feature
-            const msg = e?.message || "";
-            if (msg.includes("401") || msg.includes("403")) return "__LOCKED__";
-            throw e;
-            }
+        const awayIds = normIds(awayRoster);
+        const homeIds = normIds(homeRoster);
+
+        const seasonEndYear = 2025;
+
+        // 3) call your Vercel proxy to keep GOAT key secret
+        const callAvg = async (ids) => {
+            if (!ids.length) return [];
+            const u = new URL("/api/bdl/season-averages", window.location.origin);
+            u.searchParams.set("season", String(seasonEndYear));
+            ids.forEach(id => u.searchParams.append("player_ids[]", String(id)));
+
+            const r = await fetch(u.toString(), { cache: "no-store" });
+            const body = await r.json();
+
+            // Proxy always returns 200; check for wrapped errors
+            if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
+            if (body?.error) throw new Error(body.error);
+
+            return Array.isArray(body?.data) ? body.data : [];
         };
 
         const [awayAvgs, homeAvgs] = await Promise.all([
-            fetchAverages(awayIds),
-            fetchAverages(homeIds),
+            callAvg(awayIds),
+            callAvg(homeIds),
         ]);
         if (cancelled) return;
 
-        if (awayAvgs === "__LOCKED__" || homeAvgs === "__LOCKED__") {
-            setMini({ loading: false, error: "locked", data: null });
-            return;
-        }
-
-        // (same sorting/selecting code you already have…)
+        // 4) attach player names using roster maps
         const aMap = new Map(awayRoster.map(p => [p.id, p]));
         const hMap = new Map(homeRoster.map(p => [p.id, p]));
-        awayAvgs.forEach(x => x.player = aMap.get(x.player_id));
-        homeAvgs.forEach(x => x.player = hMap.get(x.player_id));
+        awayAvgs.forEach(x => (x.player = aMap.get(x.player_id)));
+        homeAvgs.forEach(x => (x.player = hMap.get(x.player_id)));
 
+        // 5) pick top 3 by minutes (fallback to points)
         const pickTop = (arr) => {
             const copy = [...arr];
+            const minToNum = (m) => {
+            if (!m || typeof m !== "string") return 0;
+            const [mm, ss] = m.split(":").map(Number);
+            return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
+            };
             copy.sort((x, y) => {
-            const ym = parseMinToNumber(y.min), xm = parseMinToNumber(x.min);
+            const ym = minToNum(y.min), xm = minToNum(x.min);
             if (ym !== xm) return ym - xm;
             return (y.pts || 0) - (x.pts || 0);
             });
@@ -549,7 +564,6 @@ function ComparisonDrawer({ open, onClose, game }) {
 
     return () => { cancelled = true; };
     }, [open, game?.home?.code, game?.away?.code]);
-
 
   // compute probabilities
   useEffect(() => {
