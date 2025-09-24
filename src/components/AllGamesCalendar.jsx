@@ -45,8 +45,6 @@ function daysInMonth(year, month){ // month 0..11
   return out;
 }
 
-const [avgSeason, setAvgSeason] = useState(2025);
-
 /* ========= team codes (UI labels) ========= */
 const TEAM_CODE = {
   "Atlanta Hawks":"ATL","Boston Celtics":"BOS","Brooklyn Nets":"BKN","Charlotte Hornets":"CHA","Chicago Bulls":"CHI",
@@ -435,6 +433,8 @@ function ComparisonDrawer({ open, onClose, game }) {
     const [h2h, setH2h] = useState({ loading: true, error: null, data: null });
     // mini-averages
     const [mini, setMini] = useState({ loading: true, error: null, data: null }); // { away:[], home:[] }
+    // which season the averages came from
+    const [avgSeason, setAvgSeason] = useState(2025);
 
   // fetch last 10 (away then home)
   useEffect(() => {
