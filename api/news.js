@@ -16,7 +16,7 @@ function detectInjury(text) {
   const terms = [
     "injury", "injured", "out for season", "out for the season", "out indefinitely",
     "questionable", "probable", "doubtful", "day-to-day", "day to day",
-    "ruled out", "sidelined", "setback", "return timetable", "status update",
+    "ruled out", "sidelined", "return timetable", "status update",
     "mri", "x-ray", "xray", "fracture", "broken", "sprain", "strain", "tear",
     "acl", "mcl", "pcl", "lcl", "meniscus", "achilles", "concussion",
     "hamstring", "calf", "quad", "groin", "knee", "ankle", "foot", "wrist",
