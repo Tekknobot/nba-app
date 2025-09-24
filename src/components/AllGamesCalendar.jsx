@@ -45,6 +45,8 @@ function daysInMonth(year, month){ // month 0..11
   return out;
 }
 
+const [avgSeason, setAvgSeason] = useState(2025);
+
 /* ========= team codes (UI labels) ========= */
 const TEAM_CODE = {
   "Atlanta Hawks":"ATL","Boston Celtics":"BOS","Brooklyn Nets":"BKN","Charlotte Hornets":"CHA","Chicago Bulls":"CHI",
@@ -489,14 +491,13 @@ function ComparisonDrawer({ open, onClose, game }) {
         try {
         setMini({ loading: true, error: null, data: null });
 
-        // 1) rosters (OK on free/GOAT; we use BDL player IDs from here)
+        // 1) rosters (we get BDL player IDs from here)
         const [awayRoster, homeRoster] = await Promise.all([
             fetchTeamRosterByTeamIdBDL(game.away.code),
             fetchTeamRosterByTeamIdBDL(game.home.code),
         ]);
         if (cancelled) return;
 
-        // 2) normalize & cap to keep payload small
         const normIds = (arr) =>
             Array.from(new Set((arr || [])
             .map(p => Number(p?.id))
@@ -506,77 +507,60 @@ function ComparisonDrawer({ open, onClose, game }) {
         const awayIds = normIds(awayRoster);
         const homeIds = normIds(homeRoster);
 
-        const seasonEndYear = 2025;
+        // helper to call your proxy
+        const callAvg = async (ids, season) => {
+            if (!ids.length) return [];
+            const qs = new URLSearchParams({ season: String(season) });
+            ids.forEach(id => qs.append("player_id", String(id))); // ok to send singular repeatedly
+            const base = (typeof API_BASE === "string" && API_BASE) ? API_BASE : "";
+            const url = `${base}/api/bdl/season-averages?${qs.toString()}`;
 
-        // 3) call your Vercel proxy to keep GOAT key secret
-        // guard the value into a local constant
-        const API_ORIGIN = typeof API_BASE === "string" ? API_BASE : "";
-
-        // --- DROP-IN: robust callAvg that bypasses CRA proxy on localhost ---
-        const callAvg = async (ids) => {
-        if (!ids.length) return [];
-
-        // PICK API ORIGIN:
-        // 1) If API_BASE is set, use it.
-        // 2) If running CRA dev on localhost:3000, FALL BACK to your Vercel domain (edit below).
-        // 3) Otherwise same-origin (works on vercel dev/prod).
-        const pickApiBase = () => {
-            if (typeof API_BASE === "string" && API_BASE) return API_BASE;
-            if (typeof window !== "undefined" && /localhost:3000$/.test(window.location.host)) {
-            // ⬇️ CHANGE THIS to your deployed Vercel site:
-            return "https://YOUR-APP-NAME.vercel.app";
+            const res = await fetch(url, { cache: "no-store" });
+            const ct = (res.headers.get("content-type") || "").toLowerCase();
+            const txt = await res.text();
+            if (!ct.includes("application/json")) {
+            throw new Error(`Non-JSON from ${url}: ${txt.slice(0,200).replace(/\s+/g," ").trim()}`);
             }
-            return ""; // same-origin
+            const body = JSON.parse(txt);
+            if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
+            if (body?.error) throw new Error(body.error);
+            return Array.isArray(body?.data) ? body.data : [];
         };
 
-        const base = pickApiBase();
-
-        // Build query
-        const qs = new URLSearchParams({ season: String(seasonEndYear) });
-        ids.forEach(id => qs.append("player_ids[]", String(id)));
-
-        // Absolute URL if base provided, relative otherwise
-        const url = `${base}/api/bdl/season-averages?${qs.toString()}`;
-
-        const res = await fetch(url, { cache: "no-store" });
-        const ct = (res.headers.get("content-type") || "").toLowerCase();
-        const text = await res.text();
-
-        if (!ct.includes("application/json")) {
-            const preview = text.slice(0, 200).replace(/\s+/g, " ").trim();
-            throw new Error(`Non-JSON from ${url}: ${preview}`);
-        }
-
-        const body = JSON.parse(text);
-
-        // Proxy always returns 200; bubble up wrapped errors
-        if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
-        if (body?.error) throw new Error(body.error);
-
-        return Array.isArray(body?.data) ? body.data : [];
-        };
-
-
-        const [awayAvgs, homeAvgs] = await Promise.all([
-            callAvg(awayIds),
-            callAvg(homeIds),
+        // 2) try this season; if both sides empty, fallback to last season
+        const thisSeason = 2025;
+        let [awayAvgs, homeAvgs] = await Promise.all([
+            callAvg(awayIds, thisSeason),
+            callAvg(homeIds, thisSeason),
         ]);
+        let usedSeason = thisSeason;
+
+        if ((!awayAvgs?.length) && (!homeAvgs?.length)) {
+            const prev = thisSeason - 1;
+            [awayAvgs, homeAvgs] = await Promise.all([
+            callAvg(awayIds, prev),
+            callAvg(homeIds, prev),
+            ]);
+            usedSeason = prev;
+        }
         if (cancelled) return;
 
-        // 4) attach player names using roster maps
+        setAvgSeason(usedSeason);
+
+        // 3) attach names for chips
         const aMap = new Map(awayRoster.map(p => [p.id, p]));
         const hMap = new Map(homeRoster.map(p => [p.id, p]));
         awayAvgs.forEach(x => (x.player = aMap.get(x.player_id)));
         homeAvgs.forEach(x => (x.player = hMap.get(x.player_id)));
 
-        // 5) pick top 3 by minutes (fallback to points)
-        const pickTop = (arr) => {
-            const copy = [...arr];
-            const minToNum = (m) => {
+        // 4) pick top 3 by minutes (fallback to points)
+        const minToNum = (m) => {
             if (!m || typeof m !== "string") return 0;
             const [mm, ss] = m.split(":").map(Number);
-            return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
-            };
+            return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss/60 : 0);
+        };
+        const pickTop = (arr) => {
+            const copy = [...arr];
             copy.sort((x, y) => {
             const ym = minToNum(y.min), xm = minToNum(x.min);
             if (ym !== xm) return ym - xm;
@@ -598,6 +582,7 @@ function ComparisonDrawer({ open, onClose, game }) {
 
     return () => { cancelled = true; };
     }, [open, game?.home?.code, game?.away?.code]);
+
 
   // compute probabilities
   useEffect(() => {
@@ -676,8 +661,8 @@ function ComparisonDrawer({ open, onClose, game }) {
             <Accordion sx={{ mt:1.5 }} disableGutters>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
-                Top players (’25)
-                </Typography>
+                    Top players (’{String(avgSeason).slice(2)})
+               </Typography>
             </AccordionSummary>
             <AccordionDetails>
                 {mini.loading ? (
