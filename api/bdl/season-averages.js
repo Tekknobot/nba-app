@@ -1,10 +1,28 @@
 // api/bdl/season-averages.js
-// Serverless proxy for balldontlie 'season_averages' (GOAT key stays server-side)
+// Serverless proxy for balldontlie 'season_averages'.
+// Calls upstream once per player_id (avoids "player_id must be a single integer") and merges results.
+//
+// Env (set in Vercel Project → Settings → Environment Variables):
+//   BDL_API_KEY = YOUR_GOAT_KEY   (no "Bearer " prefix)
 
 const BDL_BASE = "https://api.balldontlie.io/v1";
 
+// tiny concurrency helper to avoid hammering upstream
+async function pMap(inputs, mapper, concurrency = 8) {
+  const ret = [];
+  let i = 0;
+  const workers = Array.from({ length: Math.min(concurrency, inputs.length) }, async () => {
+    while (i < inputs.length) {
+      const idx = i++;
+      ret[idx] = await mapper(inputs[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return ret;
+}
+
 module.exports = async function handler(req, res) {
-  // CORS (safe default; tighten to your domain if you prefer)
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
@@ -26,21 +44,35 @@ module.exports = async function handler(req, res) {
     return res.status(400).end(JSON.stringify({ error: "bad_request", detail: "at least one valid player_ids[] required" }));
   }
 
-  const key = process.env.BDL_API_KEY; // set this in Vercel → Project → Settings → Environment Variables
+  const key = (process.env.BDL_API_KEY || "").trim();
   if (!key) return res.status(500).end(JSON.stringify({ error: "server_key_missing" }));
 
-  const url = new URL(`${BDL_BASE}/season_averages`);
-  url.searchParams.set("season", String(season));
-  ids.forEach(id => url.searchParams.append("player_ids[]", String(id)));
-
   try {
-    const upstream = await fetch(url, { headers: { Authorization: key } });
-    const text = await upstream.text();
+    // fan-out: one upstream call per ID using the *singular* "player_id" param
+    const results = await pMap(ids, async (id) => {
+      const url = new URL(`${BDL_BASE}/season_averages`);
+      url.searchParams.set("season", String(season));
+      url.searchParams.set("player_id", String(id)); // <- singular
 
-    if (!upstream.ok) {
-      return res.status(200).end(JSON.stringify({ error: "bdl_error", status: upstream.status, body: tryParseJSON(text) }));
+      const r = await fetch(url, { headers: { Authorization: key } });
+      const txt = await r.text();
+      if (!r.ok) {
+        // return structured error for this id; we'll just skip it
+        return { error: true, id, status: r.status, body: tryParseJSON(txt) };
+      }
+      const json = tryParseJSON(txt);
+      const arr = Array.isArray(json?.data) ? json.data : [];
+      return { error: false, id, data: arr };
+    }, 8);
+
+    // merge successful data, ignore errored ids
+    const merged = [];
+    for (const r of results) {
+      if (!r || r.error) continue;
+      merged.push(...(r.data || []));
     }
-    return res.status(200).end(text);
+
+    return res.status(200).end(JSON.stringify({ data: merged }));
   } catch (e) {
     return res.status(200).end(JSON.stringify({ error: "proxy_error", detail: String(e?.message || e) }));
   }
@@ -48,9 +80,13 @@ module.exports = async function handler(req, res) {
 
 function parseQuery(url) {
   const u = new URL(url, "http://x");
+  // support both player_ids[]=...&player_ids[]=... and (if any) player_id=...
+  const many = u.searchParams.getAll("player_ids[]");
+  const single = u.searchParams.get("player_id");
+  const all = [...many, ...(single ? [single] : [])];
   return {
     season: u.searchParams.get("season"),
-    player_ids: u.searchParams.getAll("player_ids[]"),
+    player_ids: all,
   };
 }
 function tryParseJSON(t) { try { return JSON.parse(t); } catch { return t; } }
