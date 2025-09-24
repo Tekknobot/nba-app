@@ -700,14 +700,15 @@ export default function AllGamesCalendar(){
   function openCompare(game){ setCompareGame(game); setCompareOpen(true); }
 
   return (
-    <Box
+        <Box
         sx={{
-        mx:'auto',
-        width:'100%',
-        maxWidth: { xs: 520, sm: 680, md: 840 }, // tweak as you like
-        p: 1.5
+            mx:'auto',
+            width:'100%',
+            maxWidth: 520,
+            px: { xs: 1, sm: 1.5 },   // 8px left/right on mobile, 12px on sm+
+            py: 1.5
         }}
-    >
+        >
       {/* top header (sticky) */}
       <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px:1.5 }}>
