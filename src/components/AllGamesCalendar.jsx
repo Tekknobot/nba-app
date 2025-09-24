@@ -450,7 +450,6 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
             width: 22,
             height: 22,
             fontSize: 12,
-            // darker text, light bg, subtle outline in team accent
             bgcolor: (t) => t.palette.action.hover,
             color: (t) => t.palette.text.primary,
             border: '2px solid',
@@ -461,7 +460,17 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
         </Avatar>
       }
       label={
-        <Box sx={{ display: 'inline-flex', gap: 1, alignItems: 'baseline' }}>
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'baseline',
+            gap: 1,
+            justifyContent: 'flex-start', // ⬅️ left-align the contents
+            textAlign: 'left',            // ⬅️ ensure text itself is left-aligned
+            width: '100%',                // ⬅️ stretch so justifyContent works
+          }}
+        >
           <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1 }}>
             {name}
           </Typography>
@@ -470,7 +479,7 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
             sx={{
               opacity: 0.9,
               lineHeight: 1,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', // steadier numbers
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
             }}
           >
             {nf1(avg.pts)} PTS · {nf1(avg.reb)} REB · {nf1(avg.ast)} AST
@@ -482,13 +491,15 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
         px: 0.5,
         py: 0.25,
         bgcolor: (t) => t.palette.action.selected,
-        '& .MuiChip-label': { py: 0.5 },
+        '& .MuiChip-label': {
+          py: 0.5,
+          width: '100%', // ⬅️ let label fill full width of pill
+        },
       }}
       variant="filled"
     />
   );
 }
-
 
 /* ========= Drawer ========= */
 function ComparisonDrawer({ open, onClose, game }) {
