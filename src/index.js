@@ -1,3 +1,9 @@
+// --- Fast Refresh guard (prevents "_s is not a function" in dev) ---
+if (typeof self !== "undefined") {
+  self.$RefreshSig$ = self.$RefreshSig$ || (() => (type) => type);
+  self.$RefreshReg$ = self.$RefreshReg$ || (() => {});
+}
+
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";

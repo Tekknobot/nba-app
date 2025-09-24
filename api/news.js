@@ -94,7 +94,6 @@ async function fetchFeed(feed, parser, ua) {
     })
     .filter((x) => x.title && x.link);
 
-
   } catch (e) {
     console.warn(`[news] ${feed.source} fetch error: ${e?.name || ""} ${e?.message || e}`);
     return [];

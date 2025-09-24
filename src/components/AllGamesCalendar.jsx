@@ -33,6 +33,8 @@ import {
 
 import NbaNews from "./NbaNews";
 
+import { API_BASE } from "../api/base"; // ✅ import only
+
 /* ========= small date helpers ========= */
 function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
 function addMonths(d,n){ const x=new Date(d); x.setDate(1); x.setMonth(x.getMonth()+n); return x; }
@@ -507,21 +509,53 @@ function ComparisonDrawer({ open, onClose, game }) {
         const seasonEndYear = 2025;
 
         // 3) call your Vercel proxy to keep GOAT key secret
+        // guard the value into a local constant
+        const API_ORIGIN = typeof API_BASE === "string" ? API_BASE : "";
+
+        // --- DROP-IN: robust callAvg that bypasses CRA proxy on localhost ---
         const callAvg = async (ids) => {
-            if (!ids.length) return [];
-            const u = new URL("/api/bdl/season-averages", window.location.origin);
-            u.searchParams.set("season", String(seasonEndYear));
-            ids.forEach(id => u.searchParams.append("player_ids[]", String(id)));
+        if (!ids.length) return [];
 
-            const r = await fetch(u.toString(), { cache: "no-store" });
-            const body = await r.json();
-
-            // Proxy always returns 200; check for wrapped errors
-            if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
-            if (body?.error) throw new Error(body.error);
-
-            return Array.isArray(body?.data) ? body.data : [];
+        // PICK API ORIGIN:
+        // 1) If API_BASE is set, use it.
+        // 2) If running CRA dev on localhost:3000, FALL BACK to your Vercel domain (edit below).
+        // 3) Otherwise same-origin (works on vercel dev/prod).
+        const pickApiBase = () => {
+            if (typeof API_BASE === "string" && API_BASE) return API_BASE;
+            if (typeof window !== "undefined" && /localhost:3000$/.test(window.location.host)) {
+            // ⬇️ CHANGE THIS to your deployed Vercel site:
+            return "https://YOUR-APP-NAME.vercel.app";
+            }
+            return ""; // same-origin
         };
+
+        const base = pickApiBase();
+
+        // Build query
+        const qs = new URLSearchParams({ season: String(seasonEndYear) });
+        ids.forEach(id => qs.append("player_ids[]", String(id)));
+
+        // Absolute URL if base provided, relative otherwise
+        const url = `${base}/api/bdl/season-averages?${qs.toString()}`;
+
+        const res = await fetch(url, { cache: "no-store" });
+        const ct = (res.headers.get("content-type") || "").toLowerCase();
+        const text = await res.text();
+
+        if (!ct.includes("application/json")) {
+            const preview = text.slice(0, 200).replace(/\s+/g, " ").trim();
+            throw new Error(`Non-JSON from ${url}: ${preview}`);
+        }
+
+        const body = JSON.parse(text);
+
+        // Proxy always returns 200; bubble up wrapped errors
+        if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
+        if (body?.error) throw new Error(body.error);
+
+        return Array.isArray(body?.data) ? body.data : [];
+        };
+
 
         const [awayAvgs, homeAvgs] = await Promise.all([
             callAvg(awayIds),
