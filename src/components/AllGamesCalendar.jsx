@@ -11,6 +11,9 @@ import CloseIcon from "@mui/icons-material/Close";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import "@fontsource/bebas-neue"; // defaults to 400 weight
 
+import { Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+
 import {
   summarizeLastNGames,
   daysRestBefore,
@@ -234,6 +237,102 @@ async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
   return rows;
 }
 
+// --- DROP-IN: small helpers reused below ---
+function bdlHeaders() {
+  const key = process.env.REACT_APP_BDL_API_KEY;
+  return key ? { Authorization: key } : {};
+}
+function parseMinToNumber(minStr) {
+  // "34:12" -> 34.2 approx; very rough, ok for sorting
+  if (!minStr || typeof minStr !== "string") return 0;
+  const [m, s] = minStr.split(":").map(Number);
+  return (isFinite(m) ? m : 0) + (isFinite(s) ? s/60 : 0);
+}
+
+// --- DROP-IN: head-to-head this season (A vs B) ---
+async function fetchHeadToHeadBDL(teamA_abbr, teamB_abbr, {
+  start = SEASON_START, end = SEASON_END
+} = {}) {
+  const teamA_id = BDL_TEAM_ID[teamA_abbr];
+  if (!teamA_id) throw new Error(`Unknown team code: ${teamA_abbr}`);
+  const u = new URL("https://api.balldontlie.io/v1/games");
+  u.searchParams.set("team_ids[]", String(teamA_id));
+  u.searchParams.set("start_date", start);
+  u.searchParams.set("end_date", end);
+  u.searchParams.set("per_page", "100");
+
+  const headers = bdlHeaders();
+  let page = 1, all = [];
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const data = Array.isArray(j?.data) ? j.data : [];
+    all.push(...data);
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+
+  // Keep only games where the opponent is B
+  const vs = all.filter(g => {
+    const h = (g?.home_team?.abbreviation || "").toUpperCase();
+    const v = (g?.visitor_team?.abbreviation || "").toUpperCase();
+    return h === teamB_abbr || v === teamB_abbr;
+  });
+
+  // Tally wins for A and B (finals only)
+  let aWins = 0, bWins = 0;
+  for (const g of vs) {
+    const hs = g?.home_team_score, as = g?.visitor_team_score;
+    if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
+    const homeAbbr = (g?.home_team?.abbreviation || "").toUpperCase();
+    const aIsHome = homeAbbr === teamA_abbr;
+    const aScore = aIsHome ? hs : as;
+    const bScore = aIsHome ? as : hs;
+    if (aScore > bScore) aWins++; else if (aScore < bScore) bWins++;
+  }
+  return { aWins, bWins, games: vs };
+}
+
+// --- DROP-IN: roster by team id (quick) ---
+async function fetchTeamRosterByTeamIdBDL(teamAbbr, { perPage = 100 } = {}) {
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+  const headers = bdlHeaders();
+  let page = 1, out = [];
+  const u = new URL("https://api.balldontlie.io/v1/players");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("per_page", String(perPage));
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const arr = Array.isArray(j?.data) ? j.data : [];
+    out.push(...arr);
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+  return out; // array of players with .id
+}
+
+// --- DROP-IN: season averages for many players at once ---
+async function fetchSeasonAveragesBatchBDL(playerIds, seasonEndYear = 2025) {
+  if (!playerIds?.length) return [];
+  // Batch request with multiple player_ids[]
+  const u = new URL("https://api.balldontlie.io/v1/season_averages");
+  u.searchParams.set("season", String(seasonEndYear));
+  for (const id of playerIds) u.searchParams.append("player_ids[]", String(id));
+  const r = await fetch(u, { headers: bdlHeaders() });
+  if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+  if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+  const j = await r.json();
+  return Array.isArray(j?.data) ? j.data : [];
+}
+
 function dateOnlyLabel(dateKey) {
   if (!dateKey) return "TBD";
   // Noon UTC to keep the same calendar date across US time zones
@@ -328,6 +427,11 @@ function ComparisonDrawer({ open, onClose, game }) {
   const [b, setB] = useState({ loading: true, error: null, data: null }); // home
   const [probs, setProbs] = useState(null);
 
+    // head-to-head
+    const [h2h, setH2h] = useState({ loading: true, error: null, data: null });
+    // mini-averages
+    const [mini, setMini] = useState({ loading: true, error: null, data: null }); // { away:[], home:[] }
+
   // fetch last 10 (away then home)
   useEffect(() => {
     if (!open || !game?.home?.code || !game?.away?.code) return;
@@ -355,6 +459,97 @@ function ComparisonDrawer({ open, onClose, game }) {
 
     return () => { cancelled = true; };
   }, [open, game?.home?.code, game?.away?.code]);
+
+    // fetch head-to-head for this season
+    useEffect(() => {
+    if (!open || !game?.home?.code || !game?.away?.code) return;
+    let cancelled = false;
+    (async () => {
+        try {
+        setH2h({ loading: true, error: null, data: null });
+        const { aWins, bWins } = await fetchHeadToHeadBDL(game.home.code, game.away.code);
+        if (cancelled) return;
+        setH2h({ loading: false, error: null, data: { aWins, bWins } });
+        } catch (e) {
+        if (cancelled) return;
+        setH2h({ loading: false, error: e?.message || String(e), data: null });
+        }
+    })();
+    return () => { cancelled = true; };
+    }, [open, game?.home?.code, game?.away?.code]);
+
+    // fetch mini-averages for both teams (top players by minutes)
+    useEffect(() => {
+    if (!open || !game?.home?.code || !game?.away?.code) return;
+    let cancelled = false;
+
+    (async () => {
+        try {
+        setMini({ loading: true, error: null, data: null });
+
+        // Free tier note: roster (players) is OK; stats/averages are not.
+        const [awayRoster, homeRoster] = await Promise.all([
+            fetchTeamRosterByTeamIdBDL(game.away.code),
+            fetchTeamRosterByTeamIdBDL(game.home.code),
+        ]);
+        if (cancelled) return;
+
+        // Attempt averages (will 401 on free tier)
+        const awayIds = awayRoster.map(p => p.id).slice(0, 30);
+        const homeIds = homeRoster.map(p => p.id).slice(0, 30);
+
+        const fetchAverages = async (ids) => {
+            try {
+            return await fetchSeasonAveragesBatchBDL(ids);
+            } catch (e) {
+            // If the API says unauthorized/forbidden, treat as locked feature
+            const msg = e?.message || "";
+            if (msg.includes("401") || msg.includes("403")) return "__LOCKED__";
+            throw e;
+            }
+        };
+
+        const [awayAvgs, homeAvgs] = await Promise.all([
+            fetchAverages(awayIds),
+            fetchAverages(homeIds),
+        ]);
+        if (cancelled) return;
+
+        if (awayAvgs === "__LOCKED__" || homeAvgs === "__LOCKED__") {
+            setMini({ loading: false, error: "locked", data: null });
+            return;
+        }
+
+        // (same sorting/selecting code you already have…)
+        const aMap = new Map(awayRoster.map(p => [p.id, p]));
+        const hMap = new Map(homeRoster.map(p => [p.id, p]));
+        awayAvgs.forEach(x => x.player = aMap.get(x.player_id));
+        homeAvgs.forEach(x => x.player = hMap.get(x.player_id));
+
+        const pickTop = (arr) => {
+            const copy = [...arr];
+            copy.sort((x, y) => {
+            const ym = parseMinToNumber(y.min), xm = parseMinToNumber(x.min);
+            if (ym !== xm) return ym - xm;
+            return (y.pts || 0) - (x.pts || 0);
+            });
+            return copy.slice(0, 3);
+        };
+
+        setMini({
+            loading: false,
+            error: null,
+            data: { away: pickTop(awayAvgs), home: pickTop(homeAvgs) }
+        });
+        } catch (e) {
+        if (cancelled) return;
+        setMini({ loading: false, error: e?.message || String(e), data: null });
+        }
+    })();
+
+    return () => { cancelled = true; };
+    }, [open, game?.home?.code, game?.away?.code]);
+
 
   // compute probabilities
   useEffect(() => {
@@ -416,6 +611,63 @@ function ComparisonDrawer({ open, onClose, game }) {
           homeCode={game?.home?.code}
           awayCode={game?.away?.code}
         />
+            {/* --- Head-to-head (this season) --- */}
+            {h2h.loading ? (
+            <Typography variant="caption" sx={{ opacity:0.7, mt:1, display:'block' }}>Loading season series…</Typography>
+            ) : h2h.error ? (
+            <Typography variant="caption" color="warning.main" sx={{ mt:1, display:'block' }}>
+                H2H error: {h2h.error}
+            </Typography>
+            ) : h2h.data ? (
+            <Typography variant="body2" sx={{ mt:1 }}>
+                Season series: <strong>{game?.home?.code} {h2h.data.aWins}–{h2h.data.bWins} {game?.away?.code}</strong>
+            </Typography>
+            ) : null}   
+
+            {/* --- Top players (mini-averages) --- */}
+            <Accordion sx={{ mt:1.5 }} disableGutters>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
+                Top players (’25)
+                </Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+                {mini.loading ? (
+                <Stack alignItems="center" sx={{ py:1 }}><CircularProgress size={18} /></Stack>
+                ) : mini.error ? (
+                <Typography variant="caption" color="warning.main">Averages error: {mini.error}</Typography>
+                ) : mini.data ? (
+                <Stack spacing={1.25}>
+                    {/* Away */}
+                    <Stack direction="row" alignItems="center" spacing={1}>
+                    <Chip size="small" variant="outlined" label={game?.away?.code} />
+                    <Stack direction="row" spacing={1} sx={{ flexWrap:'wrap' }}>
+                        {mini.data.away.map((p) => (
+                        <Chip
+                            key={`a-${p.player_id}`}
+                            size="small"
+                            label={`${p.player?.first_name ? (p.player.first_name[0] + ". " + p.player.last_name) : p.player_id} · ${p.pts ?? 0} PTS · ${p.reb ?? 0} REB · ${p.ast ?? 0} AST`}
+                        />
+                        ))}
+                    </Stack>
+                    </Stack>
+                    {/* Home */}
+                    <Stack direction="row" alignItems="center" spacing={1}>
+                    <Chip size="small" variant="outlined" label={game?.home?.code} />
+                    <Stack direction="row" spacing={1} sx={{ flexWrap:'wrap' }}>
+                        {mini.data.home.map((p) => (
+                        <Chip
+                            key={`h-${p.player_id}`}
+                            size="small"
+                            label={`${p.player?.first_name ? (p.player.first_name[0] + ". " + p.player.last_name) : p.player_id} · ${p.pts ?? 0} PTS · ${p.reb ?? 0} REB · ${p.ast ?? 0} AST`}
+                        />
+                        ))}
+                    </Stack>
+                    </Stack>
+                </Stack>
+                ) : null}
+            </AccordionDetails>
+            </Accordion>
       </Box>
 
       {/* sticky footer */}
@@ -705,7 +957,7 @@ export default function AllGamesCalendar(){
             mx:'auto',
             width:'100%',
             maxWidth: 520,
-            px: { xs: 1, sm: 1.25 },   // 8px left/right on mobile, 12px on sm+
+            px: { xs: 1, sm: 1.5 },   // 8px left/right on mobile, 12px on sm+
             py: 1.5
         }}
         >
