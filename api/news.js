@@ -20,7 +20,7 @@ function detectInjury(text) {
     "mri", "x-ray", "xray", "fracture", "broken", "sprain", "strain", "tear",
     "acl", "mcl", "pcl", "lcl", "meniscus", "achilles", "concussion",
     "hamstring", "calf", "quad", "groin", "knee", "ankle", "foot", "wrist",
-    "hand", "thumb", "finger", "elbow", "shoulder", "hip", "back"
+    "hand", "thumb", "finger", "elbow", "shoulder", "hip",
   ];
 
   const hits = terms.filter(t => hay.includes(t));
