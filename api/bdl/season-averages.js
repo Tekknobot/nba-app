@@ -80,13 +80,16 @@ module.exports = async function handler(req, res) {
 
 function parseQuery(url) {
   const u = new URL(url, "http://x");
-  // support both player_ids[]=...&player_ids[]=... and (if any) player_id=...
+  // collect both forms:
+  //   ?player_ids[]=1&player_ids[]=2
+  //   ?player_id=1&player_id=2  (repeated singulars)
   const many = u.searchParams.getAll("player_ids[]");
-  const single = u.searchParams.get("player_id");
-  const all = [...many, ...(single ? [single] : [])];
+  const singles = u.searchParams.getAll("player_id");
+  const all = [...many, ...singles];
   return {
     season: u.searchParams.get("season"),
     player_ids: all,
   };
 }
+
 function tryParseJSON(t) { try { return JSON.parse(t); } catch { return t; } }
