@@ -66,6 +66,20 @@ const BDL_TEAM_ID = {
 const SEASON_START = "2024-10-01";
 const SEASON_END   = "2025-06-30";
 
+// --- DROP-IN: pretty number + name helpers ---
+const nf1 = (v) => (v ?? 0).toFixed(1); // one decimal everywhere
+function initials(first = "", last = "") {
+  const f = (first || "").trim(); const l = (last || "").trim();
+  return `${f ? f[0] : ""}${l ? l[0] : ""}`.toUpperCase() || "•";
+}
+function displayName(player, fallbackId) {
+  if (!player) return `#${fallbackId}`;
+  const f = (player.first_name || "").trim();
+  const l = (player.last_name || "").trim();
+  return l ? `${f ? f[0] + ". " : ""}${l}` : (f || `#${fallbackId}`);
+}
+
+
 /* ========= Last-10 panel bits ========= */
 function Last10List({ title, loading, error, data }){
   const record = React.useMemo(()=>{
@@ -423,6 +437,37 @@ function ProbabilityCard({ probs, homeCode, awayCode }) {
   );
 }
 
+// --- DROP-IN: single player stat "pill" ---
+function PlayerPill({ avg }) {
+  const name = displayName(avg.player, avg.player_id);
+  const iv = initials(avg?.player?.first_name, avg?.player?.last_name);
+
+  return (
+    <Chip
+      avatar={<Avatar sx={{ width: 22, height: 22, fontSize: 12, bgcolor: 'primary.main', color: 'primary.contrastText' }}>{iv}</Avatar>}
+      label={
+        <Box sx={{ display: 'inline-flex', gap: 1, alignItems: 'baseline' }}>
+          <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1 }}>
+            {name}
+          </Typography>
+          <Typography variant="caption" sx={{ opacity: 0.9, lineHeight: 1 }}>
+            {nf1(avg.pts)} PTS · {nf1(avg.reb)} REB · {nf1(avg.ast)} AST
+          </Typography>
+        </Box>
+      }
+      sx={{
+        borderRadius: 999,
+        px: 0.5,
+        py: 0.25,
+        bgcolor: (t) => t.palette.action.selected,
+        '& .MuiChip-label': { py: 0.5 },
+      }}
+      variant="filled"
+    />
+  );
+}
+
+
 /* ========= Drawer ========= */
 function ComparisonDrawer({ open, onClose, game }) {
   const [a, setA] = useState({ loading: true, error: null, data: null }); // away
@@ -683,28 +728,20 @@ function ComparisonDrawer({ open, onClose, game }) {
                 <Stack spacing={1.25}>
                     {/* Away */}
                     <Stack direction="row" alignItems="center" spacing={1}>
-                    <Chip size="small" variant="outlined" label={game?.away?.code} />
-                    <Stack direction="row" spacing={1} sx={{ flexWrap:'wrap' }}>
-                        {mini.data.away.map((p) => (
-                        <Chip
-                            key={`a-${p.player_id}`}
-                            size="small"
-                            label={`${p.player?.first_name ? (p.player.first_name[0] + ". " + p.player.last_name) : p.player_id} · ${p.pts ?? 0} PTS · ${p.reb ?? 0} REB · ${p.ast ?? 0} AST`}
-                        />
-                        ))}
+                    <Chip size="small" variant="outlined" label={game?.away?.code} sx={{ minWidth: 56, justifyContent: 'center' }} />
+                    <Stack direction="row" spacing={1} sx={{ flexWrap:'wrap', rowGap: 1 }}>
+                    {mini.data.away.map((p) => (
+                        <PlayerPill key={`a-${p.player_id}`} avg={p} />
+                    ))}
                     </Stack>
                     </Stack>
                     {/* Home */}
                     <Stack direction="row" alignItems="center" spacing={1}>
-                    <Chip size="small" variant="outlined" label={game?.home?.code} />
-                    <Stack direction="row" spacing={1} sx={{ flexWrap:'wrap' }}>
-                        {mini.data.home.map((p) => (
-                        <Chip
-                            key={`h-${p.player_id}`}
-                            size="small"
-                            label={`${p.player?.first_name ? (p.player.first_name[0] + ". " + p.player.last_name) : p.player_id} · ${p.pts ?? 0} PTS · ${p.reb ?? 0} REB · ${p.ast ?? 0} AST`}
-                        />
-                        ))}
+                    <Chip size="small" variant="outlined" label={game?.home?.code} sx={{ minWidth: 56, justifyContent: 'center' }} />
+                    <Stack direction="row" spacing={1} sx={{ flexWrap:'wrap', rowGap: 1 }}>
+                    {mini.data.home.map((p) => (
+                        <PlayerPill key={`h-${p.player_id}`} avg={p} />
+                    ))}
                     </Stack>
                     </Stack>
                 </Stack>
