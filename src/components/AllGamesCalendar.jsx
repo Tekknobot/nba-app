@@ -528,7 +528,17 @@ function ComparisonDrawer({ open, onClose, game }) {
         };
 
         // 2) try this season; if both sides empty, fallback to last season
-        const thisSeason = 2025;
+        // Put this near your helpers
+        function currentSeasonEndYear(d = new Date()) {
+        // NBA seasons run Oct–Jun; "season" is named by the END year
+        const y = d.getFullYear();
+        const m = d.getMonth(); // 0=Jan ... 9=Oct
+        return (m >= 9) ? y + 1 : y; // Oct (9) or later -> next calendar year
+        }
+
+        // In your mini-averages effect:
+        const thisSeason = currentSeasonEndYear();
+
         let [awayAvgs, homeAvgs] = await Promise.all([
             callAvg(awayIds, thisSeason),
             callAvg(homeIds, thisSeason),
