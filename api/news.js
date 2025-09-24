@@ -12,16 +12,23 @@ function detectInjury(text) {
   if (!text) return { isInjury: false, hits: [] };
   const hay = text.toLowerCase();
 
-  // Core keywords and phrases seen in NBA injury headlines
-  const terms = [
-    "injury", "injured", "out for season", "out for the season", "out indefinitely",
-    "questionable", "probable", "doubtful", "day-to-day", "day to day",
-    "ruled out", "sidelined", "return timetable", "status update",
-    "mri", "x-ray", "xray", "fracture", "broken", "sprain", "strain", "tear",
-    "acl", "mcl", "pcl", "lcl", "meniscus", "achilles", "concussion",
-    "hamstring", "calf", "quad", "groin", "knee", "ankle", "foot", "wrist",
-    "hand", "thumb", "finger", "elbow", "shoulder", "hip",
-  ];
+    // Core keywords and phrases seen in NBA injury headlines
+    const terms = [
+    "injury", "injured", 
+    "out for season", "season-ending", "out indefinitely",
+    "day-to-day", "day to day", "game-time decision",
+    "ruled out", "will not play", "inactive", "sidelined",
+    "concussion protocol", "underwent surgery",
+    "mri", "x-ray", "xray",
+    "fracture", "broken",
+    "sprain", "sprained", "strain", "strained",
+    "soreness", "tightness",
+    "torn", "tear",
+    "acl", "mcl", "pcl", "lcl", "meniscus", "achilles",
+    "hamstring", "calf", "quad", "groin", "knee", "ankle",
+    "foot", "toe", "wrist", "hand", "thumb", "finger",
+    "elbow", "shoulder", "hip"
+    ];
 
   const hits = terms.filter(t => hay.includes(t));
   return { isInjury: hits.length > 0, hits };
