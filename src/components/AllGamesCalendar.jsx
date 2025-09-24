@@ -705,7 +705,7 @@ export default function AllGamesCalendar(){
             mx:'auto',
             width:'100%',
             maxWidth: 520,
-            px: { xs: 1, sm: 1.5 },   // 8px left/right on mobile, 12px on sm+
+            px: { xs: 1, sm: 1.25 },   // 8px left/right on mobile, 12px on sm+
             py: 1.5
         }}
         >
