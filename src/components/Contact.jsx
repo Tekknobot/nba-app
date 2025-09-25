@@ -64,7 +64,7 @@ export default function Contact() {
           <Divider sx={{ mb: 2 }} />
 
           <Typography variant="body1" sx={{ mb: 2 }}>
-            Have questions or feedback? Send us a message using the form below.
+            Have questions or feedback? Send a message using the form below.
           </Typography>
 
           {status.ok === true && <Alert severity="success" sx={{ mb: 2 }}>{status.msg}</Alert>}
