@@ -6,13 +6,16 @@ import {
 } from "@mui/material";
 
 export default function Contact() {
-  // ✅ EDIT JUST THESE: email = LOCAL@DOMAIN.TLD
-  const LOCAL  = "zillatronics"; // before @
-  const DOMAIN = "gmail";    // after @, before .
-  const TLD    = "com";     // .com / .app / etc.
+  // ✅ EDIT JUST THESE: email = LOCAL@DOMAIN.TLD (kept out of static HTML)
+  const LOCAL  = "contact"; // before @
+  const DOMAIN = "pivt";    // after @, before .
+  const TLD    = "app";     // .com / .app / etc.
+
+  // ✅ EDIT THIS (optional): subject prefix for all messages
+  const SUBJECT_PREFIX = "PIVT Contact Form";
 
   const getEmail = () => `${LOCAL}@${DOMAIN}.${TLD}`;
-  const enc = (s) => encodeURIComponent(s).replace(/%20/g, "+");
+  const enc = (s) => encodeURIComponent(s); // keep spaces as %20 (no +)
 
   const [status, setStatus] = React.useState({ ok: null, msg: "" });
   const formRef = React.useRef(null);
@@ -35,7 +38,8 @@ export default function Contact() {
     }
 
     const to = getEmail();
-    const subject = enc(`Contact: ${name}`);
+    // ✅ SUBJECT set here (includes the sender’s name)
+    const subject = enc(`${SUBJECT_PREFIX}: ${name}`);
     const body = enc(`Name: ${name}\nEmail: ${email}\n\n${message}`);
 
     try {
@@ -55,12 +59,12 @@ export default function Contact() {
       <Card variant="outlined" sx={{ borderRadius: 2 }}>
         <CardContent sx={{ p: 3 }}>
           <Typography variant="h5" sx={{ fontWeight: 700, mb: 1 }}>
-            Contact
+            Contact Us
           </Typography>
           <Divider sx={{ mb: 2 }} />
 
           <Typography variant="body1" sx={{ mb: 2 }}>
-            If you'd like to make contact send a message using the form below.
+            Have questions or feedback? Send us a message using the form below.
           </Typography>
 
           {status.ok === true && <Alert severity="success" sx={{ mb: 2 }}>{status.msg}</Alert>}
@@ -81,15 +85,6 @@ export default function Contact() {
               <Button variant="contained" type="submit">Send Message</Button>
             </Stack>
           </form>
-
-          {/* Optional: no-JS fallback that still hides the address */}
-          <noscript>
-            <div style={{ marginTop: 16, opacity: 0.7 }}>
-              JavaScript is required to submit the form. You can email us at:
-              {" "}
-              <code>{LOCAL} [at] {DOMAIN} [dot] {TLD}</code>
-            </div>
-          </noscript>
         </CardContent>
       </Card>
     </Box>
