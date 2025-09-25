@@ -7,9 +7,9 @@ import {
 
 export default function Contact() {
   // ✅ EDIT JUST THESE: email = LOCAL@DOMAIN.TLD (kept out of static HTML)
-  const LOCAL  = "contact"; // before @
-  const DOMAIN = "pivt";    // after @, before .
-  const TLD    = "app";     // .com / .app / etc.
+  const LOCAL  = "zillatronics"; // before @
+  const DOMAIN = "gmail";    // after @, before .
+  const TLD    = "com";     // .com / .app / etc.
 
   // ✅ EDIT THIS (optional): subject prefix for all messages
   const SUBJECT_PREFIX = "PIVT Contact Form";
