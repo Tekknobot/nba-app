@@ -207,6 +207,33 @@ async function attachPredictionsForMonth(rows) {
 }
 // ---------------------------------------------------------------------------
 
+function verdictFromProbs(game, probs) {
+  if (!probs || !game) return null;
+
+  const pHome = Number(probs.pHome);
+  if (!Number.isFinite(pHome)) return null;
+
+  // Only show verdict once the game has a final score
+  const isFinal = (game?.status || '').toLowerCase().includes('final');
+  if (!isFinal) return null;
+
+  const homeCode = codeify(game?.home, null);
+  const awayCode = codeify(game?.away, null);
+  if (!homeCode || !awayCode) return null;
+
+  const predicted = pHome > 0.5 ? homeCode : awayCode;
+  const actual = getActualWinnerCode(game);
+  if (!actual || actual === 'TIE') return null;
+
+  const correct = actual === predicted;
+  const pct = Math.round(pHome * 100);
+  return {
+    state: correct ? 'correct' : 'incorrect',
+    tooltip: `Predicted ${predicted} (${pct}%), actual ${actual}`,
+  };
+}
+
+
 /* ========= Last-10 panel bits ========= */
 function Last10List({ title, loading, error, data }){
   const record = React.useMemo(()=>{
@@ -918,7 +945,7 @@ function ComparisonDrawer({ open, onClose, game }) {
   }, [open, a.loading, b.loading, a.error, b.error, a.data, b.data, game]);
 
   // NEW: compute model verdict for this game (✔/✖ when Final & prediction exists)
-  const verdict = modelVerdict(game);
+  const verdict = verdictFromProbs(game, probs);
 
   return (
     <Drawer
