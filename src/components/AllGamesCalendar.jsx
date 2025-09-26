@@ -850,22 +850,36 @@ function ComparisonDrawer({ open, onClose, game }) {
   );
 }
 
+// --- Replace the whole resultMeta with this version ---
 function isFinal(game){
   return (game?.status || "").toLowerCase().includes("final");
 }
 
 function resultMeta(game){
   if (!isFinal(game)) return null;
+
   const home = game.home?.code || "HOME";
   const away = game.away?.code || "AWAY";
-  const hs = game.homeScore ?? 0;
-  const as = game.awayScore ?? 0;
-  const homeWon = hs > as;
-  const label = `${away} ${as} – ${home} ${hs}`;
-  const winner = homeWon ? home : away;
-  return { label, winner, homeWon };
-}
+  const hs = Number(game.homeScore ?? 0);
+  const as = Number(game.awayScore ?? 0);
 
+  const homeWon = hs > as;
+  const winnerTeam = homeWon ? home : away;
+  const loserTeam  = homeWon ? away : home;
+  const winnerPts  = homeWon ? hs   : as;
+  const loserPts   = homeWon ? as   : hs;
+
+  // Keep a single-line label around for any legacy callers
+  const label = `${away} ${as} – ${home} ${hs}`;
+
+  // New: stacked lines, winner first
+  const lines = [
+    `${winnerTeam} ${winnerPts}`,
+    `${loserTeam} ${loserPts}`,
+  ];
+
+  return { label, lines, winner: winnerTeam, homeWon };
+}
 
 /* ========= Mobile UI bits ========= */
 
@@ -991,9 +1005,28 @@ function GameCard({ game, onPick }) {
 
           {/* RIGHT CHIP(S) – don't let these shrink */}
           {final ? (
-            <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0 }}>
-              <Chip size="small" color="success" label="Final" />
-              <Chip size="small" variant="outlined" label={final.label} />
+            <Stack
+                direction="row"
+                spacing={1}
+                sx={{ flexShrink: 0, alignItems: 'flex-start' }}
+            >
+                <Chip size="small" color="success" label="Final" />
+                <Box
+                sx={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                    lineHeight: 1.15,
+                }}
+                aria-label="Final score"
+                >
+                <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    {final.lines[0]}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                    {final.lines[1]}
+                </Typography>
+                </Box>
             </Stack>
           ) : (
              <Chip
