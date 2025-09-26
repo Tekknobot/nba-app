@@ -14,6 +14,9 @@ import "@fontsource/bebas-neue"; // defaults to 400 weight
 import { Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
+
 import {
   summarizeLastNGames,
   daysRestBefore,
@@ -79,6 +82,130 @@ function displayName(player, fallbackId) {
   return l ? `${f ? f[0] + ". " : ""}${l}` : (f || `#${fallbackId}`);
 }
 
+// --- Predictions attach/merge (legacy-tolerant, single source of truth) -----
+function norm(s) {
+  return String(s || "").trim().toUpperCase();
+}
+function codeOfTeam(t) {
+  if (!t) return "";
+  if (typeof t === "string") return norm(t);
+  return norm(t.code || t.abbr || t.abbreviation || t.name);
+}
+function nameOfTeam(t) {
+  if (!t) return "";
+  if (typeof t === "string") return norm(t);
+  return norm(t.name || t.full_name || t.team || t.code || t.abbr || t.abbreviation);
+}
+function keyVariants(dateKey, away, home) {
+  const d = norm(dateKey);
+  const A = codeOfTeam(away), H = codeOfTeam(home);
+  const An = nameOfTeam(away), Hn = nameOfTeam(home);
+  return [
+    `${d}|${A}@${H}`,    // preferred
+    `${d}|${H}vs${A}`,   // old shape
+    `${d}|${H}@${A}`,    // swapped
+    `${d}|${An}@${Hn}`,  // names
+    `${d}|${Hn}@${An}`,  // swapped names
+    `${d}|${A}|${H}`,    // pipe
+    `${d}|${H}|${A}`,    // swapped pipe
+  ];
+}
+
+/**
+ * Accepts:
+ * 1) Map:  { "<key>": { pick?: "POR", pHome?: 0.62 }, ... }
+ * 2) Array: [{ date, away, home, pick?, pHome? }, ...] (codes or names)
+ */
+async function fetchPredictionsRange(startISO, endISO) {
+  const base = (typeof API_BASE === "string" && API_BASE) ? API_BASE : "";
+
+  // Try your API first
+  if (base) {
+    try {
+      const url = `${base}/api/predictions?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`;
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) {
+        const j = await res.json();
+        if (j && (Array.isArray(j) || typeof j === "object")) return j;
+      }
+    } catch { /* ignore and fall back */ }
+  }
+
+  // Dev fallback (bucketed by month)
+  try {
+    const monthKey = (startISO || "").slice(0, 7); // "YYYY-MM"
+    const local = localStorage.getItem(`preds:${monthKey}`);
+    if (local) {
+      const parsed = JSON.parse(local);
+      if (parsed && (Array.isArray(parsed) || typeof parsed === "object")) return parsed;
+    }
+  } catch {}
+
+  return {}; // nothing
+}
+
+function resolveFromContainer(container, dateKey, away, home) {
+  // Map-like lookup
+  if (container && !Array.isArray(container)) {
+    for (const k of keyVariants(dateKey, away, home)) {
+      const v = container[k];
+      if (v) return v;
+    }
+  }
+  // Array lookup
+  if (Array.isArray(container)) {
+    for (const item of container) {
+      const d  = norm(item.date || item.gameDate || item.d);
+      const aw = norm(item.away || item.awayCode || item.visitor || item.v);
+      const hm = norm(item.home || item.homeCode || item.h);
+      if (d !== norm(dateKey)) continue;
+
+      const codesMatch =
+        (aw === codeOfTeam(away) || aw === nameOfTeam(away)) &&
+        (hm === codeOfTeam(home) || hm === nameOfTeam(home));
+      const swappedMatch =
+        (aw === codeOfTeam(home) || aw === nameOfTeam(home)) &&
+        (hm === codeOfTeam(away) || hm === nameOfTeam(away));
+
+      if (codesMatch || swappedMatch) return item;
+    }
+  }
+  return null;
+}
+
+/** Mutates rows in place by setting row.model.{predictedWinner|pHome} */
+async function attachPredictionsForMonth(rows) {
+  if (!rows?.length) return rows;
+  const startISO = rows[0].dateKey;
+  const endISO   = rows[rows.length - 1].dateKey;
+
+  const container = await fetchPredictionsRange(startISO, endISO);
+
+    for (const r of rows) {
+    const found = resolveFromContainer(container, r.dateKey, r.away, r.home);
+    if (!found) continue;
+
+    // 1) Normalize explicit pick (accept codes, names, and "HOME"/"AWAY")
+    let pick = found.pick || found.winner || found.predictedWinner || found.pred;
+    if (pick) {
+        const p = String(pick).trim().toUpperCase();
+        if (p === "HOME") pick = r.home?.code;           // map to team code
+        else if (p === "AWAY") pick = r.away?.code;      // map to team code
+        r.model = { ...(r.model || {}), predictedWinner: norm(pick) };
+    }
+
+    // 2) Normalize probability (accept strings, alternate field names)
+    const phRaw =
+        found.pHome ?? found.p_home ?? found.homeProb ?? found.probHome ?? found.prob_home;
+    const ph = Number(phRaw);
+    if (Number.isFinite(ph)) {
+        r.model = { ...(r.model || {}), pHome: ph };     // always store as Number
+    }
+    }
+
+  return rows;
+}
+// ---------------------------------------------------------------------------
 
 /* ========= Last-10 panel bits ========= */
 function Last10List({ title, loading, error, data }){
@@ -120,6 +247,86 @@ function Last10List({ title, loading, error, data }){
     </Card>
   );
 }
+
+// --- Model helpers ----------------------------------------------------------
+function codeify(teamObjOrStr, fallback = '') {
+  if (!teamObjOrStr) return fallback;
+  if (typeof teamObjOrStr === 'string') return teamObjOrStr.toUpperCase();
+  return (teamObjOrStr.code || teamObjOrStr.abbr || teamObjOrStr.name || fallback).toUpperCase();
+}
+
+// Try to locate the model's predicted winner across a few common shapes.
+function getPredictedWinnerCode(game) {
+  // Prefer explicit winner strings/objects first
+  const homeCode = codeify(game?.home, null);
+  const awayCode = codeify(game?.away, null);
+
+  const stringPickCandidates = [
+    game?.model?.predictedWinner,
+    game?.model?.winner,
+    game?.prediction?.winner,
+    game?.prediction?.predictedWinner,
+    game?.predictedWinner,
+    game?.predictedWinnerCode,
+    game?.odds?.modelPick,
+  ];
+
+  for (const c of stringPickCandidates) {
+    if (!c) continue;
+    const raw = String(typeof c === "string" ? c : (c.code || c.abbr || c.name || "")).toUpperCase().trim();
+    if (raw === "HOME" && homeCode) return homeCode;
+    if (raw === "AWAY" && awayCode) return awayCode;
+    const code = codeify(raw, null);
+    if (code) return code; // e.g., "POR"
+  }
+
+  // Fallback: choose by probability when available (now numeric for sure)
+  const probCandidates = [
+    game?.model?.pHome,
+    game?.model?.probHome,
+    game?.prediction?.pHome,
+    game?.prediction?.homeWinProb,
+    game?.probabilities?.home,
+    game?.probabilities?.pHome,
+  ].map((v) => Number(v)).filter((v) => Number.isFinite(v));
+
+  if (probCandidates.length && homeCode && awayCode) {
+    const pHome = probCandidates[0];
+    return pHome > 0.5 ? homeCode : awayCode;
+  }
+
+  return null;
+}
+
+function getActualWinnerCode(game) {
+  const home = codeify(game?.home, 'HOME');
+  const away = codeify(game?.away, 'AWAY');
+  const hs = Number(game?.homeScore ?? NaN);
+  const as = Number(game?.awayScore ?? NaN);
+  if (Number.isNaN(hs) || Number.isNaN(as)) return null;
+  if (hs === as) return 'TIE';
+  return hs > as ? home : away;
+}
+
+function modelVerdict(game) {
+  // Only evaluate when Final
+  const isFinal = (game?.status || '').toLowerCase().includes('final');
+  if (!isFinal) return null;
+
+  const actual = getActualWinnerCode(game);
+  const predicted = getPredictedWinnerCode(game);
+
+  // If we don't have both a result and a prediction, don't render anything.
+  if (!actual || !predicted || actual === 'TIE') return null;
+
+  const correct = actual === predicted;
+  return {
+    state: correct ? 'correct' : 'incorrect',
+    tooltip: `Predicted ${predicted}, actual ${actual}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 
 /* ========= Fetch last-10 (existing) ========= */
 async function fetchLast10BDL(teamCode) {
@@ -394,19 +601,48 @@ function buildProbsForGame({ game, awayData, homeData }) {
   };
 }
 
-function ProbabilityCard({ probs, homeCode, awayCode }) {
+function ProbabilityCard({ probs, homeCode, awayCode, verdict }) {
   if (!probs) return null;
   const pct = Math.round(probs.pHome * 100);
+
   return (
     <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
       <CardContent sx={{ p:2 }}>
-        <Stack direction="row" alignItems="baseline" spacing={1}>
-          <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
-            Model edge
-          </Typography>
-          <Typography variant="caption" sx={{ opacity:0.7 }}>
-            (home win)
-          </Typography>
+        {/* Header row: title on left, verdict chip on right */}
+        <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Stack direction="row" alignItems="baseline" spacing={1}>
+            <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
+              Model edge
+            </Typography>
+            <Typography variant="caption" sx={{ opacity:0.7 }}>
+              (home win)
+            </Typography>
+          </Stack>
+
+          {/* ✔ / ✖ only if we have a verdict */}
+          {verdict && (
+            verdict.state === 'correct' ? (
+              <Tooltip title={verdict.tooltip}>
+                <Chip
+                  size="small"
+                  color="success"
+                  variant="outlined"
+                  icon={<CheckCircleIcon fontSize="small" />}
+                  label="Correct"
+                />
+              </Tooltip>
+            ) : (
+              <Tooltip title={verdict.tooltip}>
+                <Chip
+                  size="small"
+                  color="error"
+                  variant="outlined"
+                  icon={<CancelIcon fontSize="small" />}
+                  label="Wrong"
+                />
+              </Tooltip>
+            )
+          )}
         </Stack>
 
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
@@ -681,6 +917,9 @@ function ComparisonDrawer({ open, onClose, game }) {
     setProbs(built);
   }, [open, a.loading, b.loading, a.error, b.error, a.data, b.data, game]);
 
+  // NEW: compute model verdict for this game (✔/✖ when Final & prediction exists)
+  const verdict = modelVerdict(game);
+
   return (
     <Drawer
       anchor="right"
@@ -703,7 +942,23 @@ function ComparisonDrawer({ open, onClose, game }) {
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
           Last 10 — {game?.away?.code} @ {game?.home?.code}
         </Typography>
-        <IconButton onClick={onClose}><CloseIcon /></IconButton>
+
+        <Stack direction="row" spacing={1} alignItems="center">
+          {verdict && (
+            verdict.state === 'correct' ? (
+              <Tooltip title={verdict.tooltip}>
+                <Chip size="small" color="success" variant="outlined"
+                      icon={<CheckCircleIcon fontSize="small" />} label="Correct" />
+              </Tooltip>
+            ) : (
+              <Tooltip title={verdict.tooltip}>
+                <Chip size="small" color="error" variant="outlined"
+                      icon={<CancelIcon fontSize="small" />} label="Wrong" />
+              </Tooltip>
+            )
+          )}
+          <IconButton onClick={onClose}><CloseIcon /></IconButton>
+        </Stack>
       </Stack>
 
       {/* scrollable middle */}
@@ -731,6 +986,7 @@ function ComparisonDrawer({ open, onClose, game }) {
           probs={probs}
           homeCode={game?.home?.code}
           awayCode={game?.away?.code}
+          verdict={verdict}
         />
             {/* --- Head-to-head (this season) --- */}
             {h2h.loading ? (
@@ -1003,14 +1259,17 @@ function GameCard({ game, onPick }) {
             </Typography>
           </Box>
 
-          {/* RIGHT CHIP(S) – don't let these shrink */}
-          {final ? (
+            {/* RIGHT CHIP(S) – don't let these shrink */}
+            {final ? (
             <Stack
                 direction="row"
                 spacing={1}
                 sx={{ flexShrink: 0, alignItems: 'flex-start' }}
             >
+                {/* Final status */}
                 <Chip size="small" color="success" label="Final" />
+
+                {/* Stacked score */}
                 <Box
                 sx={{
                     display: 'flex',
@@ -1027,8 +1286,38 @@ function GameCard({ game, onPick }) {
                     {final.lines[1]}
                 </Typography>
                 </Box>
+
+                {/* Model verdict near the right edge */}
+                {(() => {
+                const verdict = modelVerdict(game);
+                if (!verdict) return null;
+
+                return verdict.state === 'correct' ? (
+                    <Tooltip title={verdict.tooltip}>
+                    <Chip
+                        size="small"
+                        color="success"
+                        variant="outlined"
+                        icon={<CheckCircleIcon fontSize="small" />}
+                        label="Model"
+                        sx={{ ml: 0.5 }}
+                    />
+                    </Tooltip>
+                ) : (
+                    <Tooltip title={verdict.tooltip}>
+                    <Chip
+                        size="small"
+                        color="error"
+                        variant="outlined"
+                        icon={<CancelIcon fontSize="small" />}
+                        label="Model"
+                        sx={{ ml: 0.5 }}
+                    />
+                    </Tooltip>
+                );
+                })()}
             </Stack>
-          ) : (
+            ) : (
              <Chip
                 size="small"
                 variant="outlined"
@@ -1083,7 +1372,14 @@ export default function AllGamesCalendar(){
           return;
         }
 
-        const rows = await fetchMonthScheduleBDL(y, mIdx);
+        let rows = await fetchMonthScheduleBDL(y, mIdx);
+        try {
+          rows = await attachPredictionsForMonth(rows);
+          console.log('[predictions]', {
+            monthKey,
+            rowsWithModel: rows.filter(r => r.model && (r.model.predictedWinner || Number.isFinite(r.model.pHome))).length
+          });          
+        } catch { /* non-fatal if predictions service is down */ }
         if (cancelled) return;
 
         const next = new Map(monthCache);
