@@ -15,7 +15,7 @@ export default function Header() {
           variant="h6"
           sx={{ fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 1, mr: 1 }}
         >
-          PIVT
+        
         </Typography>
 
         <Stack direction="row" spacing={1}>
