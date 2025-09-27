@@ -22,3 +22,4 @@ export default async function handler(req, res) {
     res.status(502).json({ error: "Upstream fetch failed", detail: String(err) });
   }
 }
+s
