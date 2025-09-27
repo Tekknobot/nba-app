@@ -17,6 +17,8 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 
+import SportsBasketballIcon from "@mui/icons-material/SportsBasketball";
+
 import {
   summarizeLastNGames,
   daysRestBefore,
@@ -1509,7 +1511,7 @@ export default function AllGamesCalendar(){
                 wordBreak: 'break-word' // break long words if needed
                 }}
             >
-                NBA Games
+                <SportsBasketballIcon fontSize="small" sx={{ verticalAlign: "middle" }} />
             </Typography>
             </Box>
             <Divider orientation="vertical" flexItem sx={{ opacity:0.2 }} />
