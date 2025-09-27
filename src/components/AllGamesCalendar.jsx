@@ -1496,7 +1496,7 @@ export default function AllGamesCalendar(){
                 fontWeight: 400
                 }}
             >
-                PIVT
+                
             </Typography>
             <Typography
                 variant="caption"
