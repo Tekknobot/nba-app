@@ -1509,7 +1509,7 @@ export default function AllGamesCalendar(){
                 wordBreak: 'break-word' // break long words if needed
                 }}
             >
-                NBA games.
+                NBA Games
             </Typography>
             </Box>
             <Divider orientation="vertical" flexItem sx={{ opacity:0.2 }} />
