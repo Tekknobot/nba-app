@@ -1511,7 +1511,7 @@ export default function AllGamesCalendar(){
                 wordBreak: 'break-word' // break long words if needed
                 }}
             >
-                <SportsBasketballIcon fontSize="small" sx={{ verticalAlign: "middle" }} />
+                NBA <SportsBasketballIcon fontSize="small" sx={{ verticalAlign: "middle" }} />
             </Typography>
             </Box>
             <Divider orientation="vertical" flexItem sx={{ opacity:0.2 }} />
