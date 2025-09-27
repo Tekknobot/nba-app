@@ -1,35 +1,27 @@
-import { ThemeProvider, createTheme, alpha } from "@mui/material/styles";
+// src/theme.js (clean, no court visuals)
+import { createTheme, alpha } from "@mui/material/styles";
 
-// Hardwood palette
-const WOOD_LIGHT = "#E7CFA5";
-const WOOD_MED   = "#D5B47A";
-const WOOD_DARK  = "#B68B4C";
-const INK        = "#0C0A09";    // UI chrome (drawer shadows etc.)
-const PAPER      = "#1A1410";    // deep walnut for surfaces
-const LINES      = "#7A5A2E";    // court line color (brown)
-const PAINT_BG   = "#2E3A8C";    // muted “paint” accent (blue lane feel)
-const ACCENT_RED = "#C9082A";    // alt accent
+// Minimal palette
+const NBA_BLUE = "#17408B";
+const NBA_RED  = "#C9082A";
+const INK      = "#0B0F14"; // app bg
+const PAPER    = "#11161D"; // card bg
 
 const theme = createTheme({
   palette: {
     mode: "dark",
-    // Buttons/links use lane blue + alt red so actions pop on wood
-    primary:   { main: PAINT_BG },
-    secondary: { main: ACCENT_RED },
-    background: {
-      // overall canvas is wood, cards are dark walnut for contrast
-      default: WOOD_MED,
-      paper: PAPER,
-    },
-    divider: alpha("#000", 0.28),
+    primary:   { main: NBA_BLUE },
+    secondary: { main: NBA_RED },
+    background: { default: INK, paper: PAPER },
+    divider: "rgba(255,255,255,0.12)",
     text: {
-      primary: alpha("#fff", 0.95),
-      secondary: alpha("#fff", 0.7),
+      primary: "rgba(255,255,255,0.95)",
+      secondary: "rgba(255,255,255,0.7)",
     },
     action: {
-      hover: alpha("#000", 0.06),
-      selected: alpha(PAINT_BG, 0.16),
-      focus: alpha(ACCENT_RED, 0.18),
+      hover: alpha("#ffffff", 0.06),
+      selected: alpha(NBA_BLUE, 0.14),
+      focus: alpha(NBA_RED, 0.2),
       disabledOpacity: 0.38,
     },
   },
@@ -49,98 +41,67 @@ const theme = createTheme({
   },
 
   components: {
+    // Keep only subtle global tweaks (no background textures)
     MuiCssBaseline: {
       styleOverrides: {
-        body: {
-          /* PARQUET + COURT LINES (layered gradients):
-             1) parquet planks (two angled repeating-linear-gradients)
-             2) subtle grain dots
-             3) center circle line (radial ring)
-             4) side lines (full-court) */
-          backgroundImage: `
-            repeating-linear-gradient(45deg, ${WOOD_LIGHT} 0 24px, ${WOOD_MED} 24px 48px),
-            repeating-linear-gradient(-45deg, ${alpha(WOOD_DARK,0.14)} 0 2px, transparent 2px 48px),
-            radial-gradient(circle at 50% 50%, transparent 0 108px, ${alpha(LINES,0.55)} 109px 111px, transparent 112px),
-            linear-gradient(transparent 0 calc(50% - 2px), ${alpha(LINES,0.55)} calc(50% - 2px) calc(50% + 2px), transparent calc(50% + 2px))
-          `,
-          backgroundSize: "auto, auto, 100% 100%, 100% 100%",
-          // soft vignette so content panels pop
-          boxShadow: `inset 0 0 300px ${alpha("#000", 0.35)}`,
-          // optional: a very faint “paint” area glow at center court
-          position: "relative",
-        },
-
-        /* modern scrollbars that don’t fight the wood */
         "*::-webkit-scrollbar": { height: 8, width: 8 },
         "*::-webkit-scrollbar-thumb": {
-          backgroundColor: alpha("#000", 0.22),
+          backgroundColor: alpha("#fff", 0.18),
           borderRadius: 8,
         },
-        "*::-webkit-scrollbar-thumb:hover": { backgroundColor: alpha("#000", 0.32) },
+        "*::-webkit-scrollbar-thumb:hover": { backgroundColor: alpha("#fff", 0.28) },
       },
     },
 
-    // Cards feel like score tables sitting on the court
     MuiCard: {
       styleOverrides: {
         root: {
-          background: `linear-gradient(180deg, ${alpha("#000",0.5)}, ${alpha("#000",0.65)})`,
-          border: `1px solid ${alpha("#000", 0.35)}`,
-          boxShadow: `0 10px 26px ${alpha("#000", 0.45)}`,
+          background: `linear-gradient(180deg, ${alpha("#ffffff",0.02)} 0%, transparent 60%)`,
+          border: `1px solid ${alpha("#fff", 0.06)}`,
+          boxShadow: `0 8px 24px ${alpha("#000", 0.35)}`,
         },
       },
     },
 
     MuiPaper: { styleOverrides: { root: { backgroundImage: "none" } } },
 
-    // Buttons: painted lane look with slight inset outline on hover
     MuiButton: {
       defaultProps: { disableElevation: true },
       styleOverrides: {
         root: {
           borderRadius: 12,
           paddingInline: 16,
-          "&:hover": { boxShadow: `0 0 0 2px ${alpha("#fff", 0.08)} inset` },
+          "&:hover": { boxShadow: `0 0 0 2px ${alpha(NBA_BLUE, 0.25)} inset` },
         },
         containedPrimary: {
-          background: `linear-gradient(180deg, ${PAINT_BG}, ${alpha(PAINT_BG, 0.92)})`,
+          background: `linear-gradient(180deg, ${NBA_BLUE}, ${alpha(NBA_BLUE, 0.9)})`,
         },
         containedSecondary: {
-          background: `linear-gradient(180deg, ${ACCENT_RED}, ${alpha(ACCENT_RED, 0.92)})`,
+          background: `linear-gradient(180deg, ${NBA_RED}, ${alpha(NBA_RED, 0.9)})`,
         },
         outlined: {
           borderColor: alpha("#fff", 0.2),
-          backgroundColor: alpha("#000", 0.12),
+          backgroundColor: alpha("#fff", 0.04),
         },
       },
     },
 
-    // Chips: scoreboard tags
     MuiChip: {
       styleOverrides: {
         root: { borderRadius: 999, fontWeight: 800, letterSpacing: 0.3 },
-        colorSuccess: { backgroundColor: alpha("#22c55e", 0.18) },
-        colorError: { backgroundColor: alpha("#ef4444", 0.18) },
-        outlined: {
-          borderColor: alpha("#fff", 0.24),
-          backgroundColor: alpha("#000", 0.12),
-        },
+        outlined: { borderColor: alpha("#fff", 0.24), backgroundColor: alpha("#fff", 0.04) },
       },
     },
 
-    // ListItem hover feels like stepping across a painted line
     MuiListItemButton: {
       styleOverrides: {
         root: {
-          borderRadius: 10,
+          borderRadius: 8,
           transition: "transform 80ms ease, background-color 120ms ease",
-          "&:hover": {
-            backgroundColor: alpha(PAINT_BG, 0.12),
-            transform: "translateY(-1px)",
-          },
+          "&:hover": { backgroundColor: alpha(NBA_BLUE, 0.08), transform: "translateY(-1px)" },
           "&.Mui-selected": {
-            backgroundColor: alpha(ACCENT_RED, 0.16),
-            "&:hover": { backgroundColor: alpha(ACCENT_RED, 0.2) },
+            backgroundColor: alpha(NBA_RED, 0.14),
+            "&:hover": { backgroundColor: alpha(NBA_RED, 0.18) },
           },
         },
       },
@@ -150,21 +111,17 @@ const theme = createTheme({
       styleOverrides: {
         tooltip: {
           fontWeight: 700,
-          border: `1px solid ${alpha("#000", 0.35)}`,
+          border: `1px solid ${alpha("#fff", 0.1)}`,
           background: `linear-gradient(180deg, ${alpha("#000",0.85)}, ${alpha("#000",0.7)})`,
         },
       },
     },
 
     MuiLinearProgress: {
-      styleOverrides: {
-        bar: { boxShadow: `0 0 10px ${alpha(PAINT_BG, 0.45)}` },
-      },
+      styleOverrides: { bar: { boxShadow: `0 0 12px ${alpha(NBA_BLUE, 0.4)}` } },
     },
 
-    MuiDivider: {
-      styleOverrides: { root: { borderColor: alpha("#000", 0.34) } },
-    },
+    MuiDivider: { styleOverrides: { root: { borderColor: "rgba(255,255,255,0.12)" } } },
   },
 });
 
