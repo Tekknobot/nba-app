@@ -1,11 +1,12 @@
-// src/theme.js (clean, no court visuals)
+// src/theme.js (mid-dark variant)
 import { createTheme, alpha } from "@mui/material/styles";
 
-// Minimal palette
 const NBA_BLUE = "#17408B";
 const NBA_RED  = "#C9082A";
-const INK      = "#0B0F14"; // app bg
-const PAPER    = "#11161D"; // card bg
+
+// Mid-dark neutrals (lighter than before)
+const INK   = "#161B22"; // app bg (midnight slate)
+const PAPER = "#1F2631"; // card bg (softer contrast)
 
 const theme = createTheme({
   palette: {
@@ -13,14 +14,14 @@ const theme = createTheme({
     primary:   { main: NBA_BLUE },
     secondary: { main: NBA_RED },
     background: { default: INK, paper: PAPER },
-    divider: "rgba(255,255,255,0.12)",
+    divider: "rgba(255,255,255,0.18)", // a touch brighter
     text: {
-      primary: "rgba(255,255,255,0.95)",
-      secondary: "rgba(255,255,255,0.7)",
+      primary: "rgba(255,255,255,0.92)",
+      secondary: "rgba(255,255,255,0.72)",
     },
     action: {
-      hover: alpha("#ffffff", 0.06),
-      selected: alpha(NBA_BLUE, 0.14),
+      hover: alpha("#ffffff", 0.08),
+      selected: alpha(NBA_BLUE, 0.16),
       focus: alpha(NBA_RED, 0.2),
       disabledOpacity: 0.38,
     },
@@ -41,24 +42,24 @@ const theme = createTheme({
   },
 
   components: {
-    // Keep only subtle global tweaks (no background textures)
     MuiCssBaseline: {
       styleOverrides: {
         "*::-webkit-scrollbar": { height: 8, width: 8 },
         "*::-webkit-scrollbar-thumb": {
-          backgroundColor: alpha("#fff", 0.18),
+          backgroundColor: alpha("#fff", 0.2),
           borderRadius: 8,
         },
-        "*::-webkit-scrollbar-thumb:hover": { backgroundColor: alpha("#fff", 0.28) },
+        "*::-webkit-scrollbar-thumb:hover": { backgroundColor: alpha("#fff", 0.3) },
       },
     },
 
     MuiCard: {
       styleOverrides: {
         root: {
-          background: `linear-gradient(180deg, ${alpha("#ffffff",0.02)} 0%, transparent 60%)`,
-          border: `1px solid ${alpha("#fff", 0.06)}`,
-          boxShadow: `0 8px 24px ${alpha("#000", 0.35)}`,
+          // lighter, neutral sheen (works on mid-dark)
+          background: `linear-gradient(180deg, ${alpha("#ffffff",0.03)} 0%, ${alpha("#ffffff",0.00)} 60%)`,
+          border: `1px solid ${alpha("#ffffff", 0.12)}`,
+          boxShadow: `0 10px 24px ${alpha("#000", 0.28)}`,
         },
       },
     },
@@ -71,7 +72,7 @@ const theme = createTheme({
         root: {
           borderRadius: 12,
           paddingInline: 16,
-          "&:hover": { boxShadow: `0 0 0 2px ${alpha(NBA_BLUE, 0.25)} inset` },
+          "&:hover": { boxShadow: `0 0 0 2px ${alpha(NBA_BLUE, 0.22)} inset` },
         },
         containedPrimary: {
           background: `linear-gradient(180deg, ${NBA_BLUE}, ${alpha(NBA_BLUE, 0.9)})`,
@@ -80,8 +81,8 @@ const theme = createTheme({
           background: `linear-gradient(180deg, ${NBA_RED}, ${alpha(NBA_RED, 0.9)})`,
         },
         outlined: {
-          borderColor: alpha("#fff", 0.2),
-          backgroundColor: alpha("#fff", 0.04),
+          borderColor: alpha("#fff", 0.22),
+          backgroundColor: alpha("#fff", 0.06),
         },
       },
     },
@@ -89,7 +90,7 @@ const theme = createTheme({
     MuiChip: {
       styleOverrides: {
         root: { borderRadius: 999, fontWeight: 800, letterSpacing: 0.3 },
-        outlined: { borderColor: alpha("#fff", 0.24), backgroundColor: alpha("#fff", 0.04) },
+        outlined: { borderColor: alpha("#fff", 0.26), backgroundColor: alpha("#fff", 0.06) },
       },
     },
 
@@ -98,10 +99,10 @@ const theme = createTheme({
         root: {
           borderRadius: 8,
           transition: "transform 80ms ease, background-color 120ms ease",
-          "&:hover": { backgroundColor: alpha(NBA_BLUE, 0.08), transform: "translateY(-1px)" },
+          "&:hover": { backgroundColor: alpha(NBA_BLUE, 0.10), transform: "translateY(-1px)" },
           "&.Mui-selected": {
-            backgroundColor: alpha(NBA_RED, 0.14),
-            "&:hover": { backgroundColor: alpha(NBA_RED, 0.18) },
+            backgroundColor: alpha(NBA_RED, 0.16),
+            "&:hover": { backgroundColor: alpha(NBA_RED, 0.20) },
           },
         },
       },
@@ -111,17 +112,17 @@ const theme = createTheme({
       styleOverrides: {
         tooltip: {
           fontWeight: 700,
-          border: `1px solid ${alpha("#fff", 0.1)}`,
-          background: `linear-gradient(180deg, ${alpha("#000",0.85)}, ${alpha("#000",0.7)})`,
+          border: `1px solid ${alpha("#fff", 0.12)}`,
+          background: `linear-gradient(180deg, ${alpha("#000",0.78)}, ${alpha("#000",0.64)})`,
         },
       },
     },
 
     MuiLinearProgress: {
-      styleOverrides: { bar: { boxShadow: `0 0 12px ${alpha(NBA_BLUE, 0.4)}` } },
+      styleOverrides: { bar: { boxShadow: `0 0 10px ${alpha(NBA_BLUE, 0.35)}` } },
     },
 
-    MuiDivider: { styleOverrides: { root: { borderColor: "rgba(255,255,255,0.12)" } } },
+    MuiDivider: { styleOverrides: { root: { borderColor: "rgba(255,255,255,0.18)" } } },
   },
 });
 
