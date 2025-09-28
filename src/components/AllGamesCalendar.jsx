@@ -630,7 +630,7 @@ function buildProbsForGame({ game, awayData, homeData }) {
   };
 }
 
-function ProbabilityCard({ probs, homeCode, awayCode, verdict }) {
+function ProbabilityCard({ probs, homeCode, awayCode, verdict, live }) {
   if (!probs) return null;
   const pct = Math.round(probs.pHome * 100);
 
@@ -647,6 +647,29 @@ function ProbabilityCard({ probs, homeCode, awayCode, verdict }) {
               (home win)
             </Typography>
           </Stack>
+
+          {/* Live score + period (only while in progress) */}
+          {live?.isLive && (
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+              <Chip
+                size="small"
+                color="warning"
+                variant="outlined"
+                label={
+                  `${homeCode} ${live.homeScore ?? '-'} — ${awayCode} ${live.awayScore ?? '-'}`
+                }
+              />
+              <Chip
+                size="small"
+                variant="outlined"
+                label={
+                  live.time
+                    ? (live.period ? `Q${live.period} · ${live.time}` : live.time)
+                    : (live.period ? `Q${live.period}` : (live.status || 'Live'))
+                }
+              />
+            </Stack>
+          )}
 
           {/* ✔ / ✖ only if we have a verdict */}
           {verdict && (
@@ -766,11 +789,34 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
   );
 }
 
+// Fetch a single game by balldontlie game id
+async function fetchGameByIdBDL(gameId) {
+  if (!gameId) throw new Error("Missing game id");
+  const u = `https://api.balldontlie.io/v1/games/${gameId}`;
+  const r = await fetch(u, { headers: bdlHeaders() });
+  if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+  if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+  const j = await r.json();
+  const g = j || {};
+  return {
+    id: g.id,
+    status: g.status || "",
+    homeCode: (g.home_team?.abbreviation || "").toUpperCase(),
+    awayCode: (g.visitor_team?.abbreviation || "").toUpperCase(),
+    homeScore: Number.isFinite(g.home_team_score) ? g.home_team_score : null,
+    awayScore: Number.isFinite(g.visitor_team_score) ? g.visitor_team_score : null,
+    period: Number.isFinite(g.period) ? g.period : null,
+    time: g.time || "", // sometimes empty; we’ll guard
+  };
+}
+
+
 /* ========= Drawer ========= */
 function ComparisonDrawer({ open, onClose, game }) {
   const [a, setA] = useState({ loading: true, error: null, data: null }); // away
   const [b, setB] = useState({ loading: true, error: null, data: null }); // home
   const [probs, setProbs] = useState(null);
+  const [live, setLive] = useState(null);
 
     // head-to-head
     const [h2h, setH2h] = useState({ loading: true, error: null, data: null });
@@ -946,6 +992,50 @@ function ComparisonDrawer({ open, onClose, game }) {
     setProbs(built);
   }, [open, a.loading, b.loading, a.error, b.error, a.data, b.data, game]);
 
+  // Live polling: while the game isn't Final, poll BDL every 15s for score/quarter
+  useEffect(() => {
+    if (!open || !game?.id) return;
+
+    let stop = false;
+    let timer = null;
+
+    const load = async () => {
+      try {
+        const g = await fetchGameByIdBDL(game.id);
+        if (stop) return;
+
+        setLive({
+          status: g.status,               // e.g., "In Progress", "Final", "Halftime"
+          homeCode: g.homeCode,
+          awayCode: g.awayCode,
+          homeScore: g.homeScore,
+          awayScore: g.awayScore,
+          period: g.period,               // number if provided
+          time: g.time,                   // "08:12" or ""
+          isFinal: /final/i.test(g.status || ""),
+          isLive: /in progress|end of|halftime|quarter|q\d/i.test(g.status || ""),
+        });
+
+        // stop polling if final
+        if (/final/i.test(g.status || "")) return;
+
+        // schedule next tick
+        timer = setTimeout(load, 15000);
+      } catch (e) {
+        // Back off on errors but keep trying if still open & not final
+        if (!stop) timer = setTimeout(load, 20000);
+      }
+    };
+
+    load();
+
+    return () => {
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [open, game?.id]);
+
+
   // NEW: compute model verdict for this game (✔/✖ when Final & prediction exists)
   const verdict = verdictFromProbs(game, probs);
 
@@ -1016,6 +1106,7 @@ function ComparisonDrawer({ open, onClose, game }) {
           homeCode={game?.home?.code}
           awayCode={game?.away?.code}
           verdict={verdict}
+          live={live}
         />
             {/* --- Head-to-head (this season) --- */}
             {h2h.loading ? (
