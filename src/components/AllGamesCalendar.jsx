@@ -355,7 +355,145 @@ function modelVerdict(game) {
   };
 }
 
+function isoDaysAgo(n, from = new Date()){
+  const d = new Date(from); d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0,10);
+}
+function clampISODateOnly(iso){ return (iso || '').slice(0,10); }
+
 // ---------------------------------------------------------------------------
+
+async function fetchTeamFormBDL(teamAbbr, {
+  days = 21, // use 14–28 as you like
+  includePostseason = false
+} = {}) {
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+
+  const start_date = isoDaysAgo(days);
+  const end_date   = new Date().toISOString().slice(0,10);
+
+  // /v1/games supports team_ids[], start_date, end_date, postseason
+  const u = new URL("https://api.balldontlie.io/v1/games");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("start_date", start_date);
+  u.searchParams.set("end_date", end_date);
+  u.searchParams.set("postseason", includePostseason ? "true" : "false");
+  u.searchParams.set("per_page", "100");
+
+  const headers = bdlHeaders();
+  let page = 1, all = [];
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (r.status === 402 || r.status === 403) throw new Error("BDL paid tier required for recent game window.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const data = Array.isArray(j?.data) ? j.data : [];
+    all.push(...data);
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+
+  // Convert to your { team, games:[{date,opp,homeAway,result,score}] } shape
+  const games = all
+    .filter(g => (g?.status || "").toLowerCase().includes("final"))
+    .sort((a,b)=> new Date(b.date) - new Date(a.date))
+    .slice(0, 10) // still last-10, but taken from the recent window
+    .map(g => {
+      const home = (g.home_team?.abbreviation || "HOME").toUpperCase();
+      const away = (g.visitor_team?.abbreviation || "AWAY").toUpperCase();
+      const isHome = home === teamAbbr;
+      const my     = isHome ? g.home_team_score : g.visitor_team_score;
+      const their  = isHome ? g.visitor_team_score : g.home_team_score;
+      const result = my > their ? "W" : (my < their ? "L" : "T");
+      const opp    = isHome ? away : home;
+      const score  = `${home} ${g.home_team_score} - ${away} ${g.visitor_team_score}`;
+      return {
+        date: clampISODateOnly(g.date),
+        opp, homeAway: isHome ? "Home" : "Away", result, score
+      };
+    });
+
+  return { team: teamAbbr, games, _source: `balldontlie:recent(${start_date}→${end_date})` };
+}
+
+async function fetchRecentPlayerAveragesBDL(teamAbbr, {
+  days = 21, // pick your window
+  seasonEndYear = 2025,
+} = {}) {
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+
+  const start_date = isoDaysAgo(days);
+  const end_date   = new Date().toISOString().slice(0,10);
+
+  // Pull recent box-score level rows, aggregated client-side by player_id.
+  // /v1/stats supports team_ids[], start_date, end_date, postseason=false
+  const u = new URL("https://api.balldontlie.io/v1/stats");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("start_date", start_date);
+  u.searchParams.set("end_date", end_date);
+  u.searchParams.set("postseason", "false");
+  u.searchParams.set("per_page", "100");
+
+  const headers = bdlHeaders();
+  let page = 1, rows = [];
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (r.status === 402 || r.status === 403) throw new Error("BDL paid tier required for recent player stats.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const data = Array.isArray(j?.data) ? j.data : [];
+    rows.push(...data);
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+
+  // Aggregate per player_id
+  const byPlayer = new Map();
+  for (const s of rows) {
+    const pid = Number(s?.player?.id ?? s?.player_id);
+    if (!Number.isFinite(pid)) continue;
+    if (!byPlayer.has(pid)) {
+      byPlayer.set(pid, {
+        player_id: pid,
+        player: s.player || null,
+        gp: 0, min: 0, pts: 0, reb: 0, ast: 0,
+      });
+    }
+    const p = byPlayer.get(pid);
+    p.gp += 1;
+    // times are strings like "32:18"; approximate to minutes.float
+    p.min += parseMinToNumber(String(s?.min || s?.minutes || "0:00"));
+    p.pts += Number(s?.pts || 0);
+    p.reb += Number(s?.reb || 0);
+    p.ast += Number(s?.ast || 0);
+  }
+
+  // Convert to averages
+  const avgs = Array.from(byPlayer.values()).map(p => ({
+    player_id: p.player_id,
+    player: p.player,
+    // Keep min as "avg minutes per game" in mm:ss-like precision? we’ll keep float for ranking and present 1-decimal.
+    min: `${Math.floor((p.min / p.gp) || 0)}:${String(Math.round((((p.min / p.gp) % 1) * 60))||0).padStart(2,'0')}`,
+    pts: (p.pts / p.gp) || 0,
+    reb: (p.reb / p.gp) || 0,
+    ast: (p.ast / p.gp) || 0,
+  }));
+
+  // Rank by minutes (desc), then points
+  avgs.sort((a,b)=>{
+    const am = parseMinToNumber(a.min), bm = parseMinToNumber(b.min);
+    if (bm !== am) return bm - am;
+    return (b.pts||0) - (a.pts||0);
+  });
+
+  return { window: `${start_date}→${end_date}`, players: avgs };
+}
 
 /* ========= Fetch last-10 (existing) ========= */
 async function fetchLast10BDL(teamCode) {
@@ -813,19 +951,20 @@ async function fetchGameByIdBDL(gameId) {
 
 /* ========= Drawer ========= */
 function ComparisonDrawer({ open, onClose, game }) {
-  const [a, setA] = useState({ loading: true, error: null, data: null }); // away
-  const [b, setB] = useState({ loading: true, error: null, data: null }); // home
+  const [a, setA] = useState({ loading: true, error: null, data: null }); // away recent form
+  const [b, setB] = useState({ loading: true, error: null, data: null }); // home recent form
   const [probs, setProbs] = useState(null);
   const [live, setLive] = useState(null);
 
-    // head-to-head
-    const [h2h, setH2h] = useState({ loading: true, error: null, data: null });
-    // mini-averages
-    const [mini, setMini] = useState({ loading: true, error: null, data: null }); // { away:[], home:[] }
-    // which season the averages came from
-    const [avgSeason, setAvgSeason] = useState(2025);
+  // head-to-head
+  const [h2h, setH2h] = useState({ loading: true, error: null, data: null });
 
-  // fetch last 10 (away then home)
+  // mini-averages (rolling recent; fallback to season if blocked)
+  const [mini, setMini] = useState({ loading: true, error: null, data: null }); // { away:[], home:[] }
+  const [miniMode, setMiniMode] = useState("recent"); // "recent" | "season-fallback"
+  const [avgSeason, setAvgSeason] = useState(2025);   // used when season-fallback is in play
+
+  // ------------------ Recent form (last-10 inside recent window) ------------------
   useEffect(() => {
     if (!open || !game?.home?.code || !game?.away?.code) return;
     let cancelled = false;
@@ -835,9 +974,10 @@ function ComparisonDrawer({ open, onClose, game }) {
         setA({ loading: true, error: null, data: null });
         setB({ loading: true, error: null, data: null });
 
+        // Uses helper that queries /v1/games with start_date/end_date
         const [A, B] = await Promise.all([
-          fetchLast10BDL(game.away.code),
-          fetchLast10BDL(game.home.code),
+          fetchTeamFormBDL(game.away.code, { days: 21 }),
+          fetchTeamFormBDL(game.home.code, { days: 21 }),
         ]);
         if (cancelled) return;
         setA({ loading: false, error: null, data: A });
@@ -853,54 +993,66 @@ function ComparisonDrawer({ open, onClose, game }) {
     return () => { cancelled = true; };
   }, [open, game?.home?.code, game?.away?.code]);
 
-    // fetch head-to-head for this season
-    useEffect(() => {
+  // ------------------ Head-to-head (this season) ------------------
+  useEffect(() => {
     if (!open || !game?.home?.code || !game?.away?.code) return;
     let cancelled = false;
     (async () => {
-        try {
+      try {
         setH2h({ loading: true, error: null, data: null });
         const { aWins, bWins } = await fetchHeadToHeadBDL(game.home.code, game.away.code);
         if (cancelled) return;
         setH2h({ loading: false, error: null, data: { aWins, bWins } });
-        } catch (e) {
+      } catch (e) {
         if (cancelled) return;
         setH2h({ loading: false, error: e?.message || String(e), data: null });
-        }
+      }
     })();
     return () => { cancelled = true; };
-    }, [open, game?.home?.code, game?.away?.code]);
+  }, [open, game?.home?.code, game?.away?.code]);
 
-    // fetch mini-averages for both teams (top players by minutes) — via Vercel proxy
-    useEffect(() => {
+  // ------------------ Rolling recent player averages (fallback to season) ------------------
+  useEffect(() => {
     if (!open || !game?.home?.code || !game?.away?.code) return;
     let cancelled = false;
 
     (async () => {
-        try {
+      try {
         setMini({ loading: true, error: null, data: null });
+        setMiniMode("recent");
 
-        // 1) rosters (we get BDL player IDs from here)
-        const [awayRoster, homeRoster] = await Promise.all([
+        // First try the recent window via /v1/stats
+        let awayRecent, homeRecent;
+        try {
+          [awayRecent, homeRecent] = await Promise.all([
+            fetchRecentPlayerAveragesBDL(game.away.code, { days: 21 }),
+            fetchRecentPlayerAveragesBDL(game.home.code, { days: 21 }),
+          ]);
+        } catch (tierErr) {
+          // Likely API key/tier limits -> fall back to season averages via your proxy
+          setMiniMode("season-fallback");
+
+          // 1) Rosters (get BDL IDs from here)
+          const [awayRoster, homeRoster] = await Promise.all([
             fetchTeamRosterByTeamIdBDL(game.away.code),
             fetchTeamRosterByTeamIdBDL(game.home.code),
-        ]);
-        if (cancelled) return;
+          ]);
+          if (cancelled) return;
 
-        const normIds = (arr) =>
+          const normIds = (arr) =>
             Array.from(new Set((arr || [])
-            .map(p => Number(p?.id))
-            .filter(n => Number.isInteger(n) && n > 0)))
-            .slice(0, 30);
+              .map(p => Number(p?.id))
+              .filter(n => Number.isInteger(n) && n > 0)))
+              .slice(0, 30);
 
-        const awayIds = normIds(awayRoster);
-        const homeIds = normIds(homeRoster);
+          const awayIds = normIds(awayRoster);
+          const homeIds = normIds(homeRoster);
 
-        // helper to call your proxy
-        const callAvg = async (ids, season) => {
+          // Proxy call for season_averages (unchanged from your version)
+          const callAvg = async (ids, season) => {
             if (!ids.length) return [];
             const qs = new URLSearchParams({ season: String(season) });
-            ids.forEach(id => qs.append("player_id", String(id))); // ok to send singular repeatedly
+            ids.forEach(id => qs.append("player_id", String(id)));
             const base = (typeof API_BASE === "string" && API_BASE) ? API_BASE : "";
             const url = `${base}/api/bdl/season-averages?${qs.toString()}`;
 
@@ -908,82 +1060,93 @@ function ComparisonDrawer({ open, onClose, game }) {
             const ct = (res.headers.get("content-type") || "").toLowerCase();
             const txt = await res.text();
             if (!ct.includes("application/json")) {
-            throw new Error(`Non-JSON from ${url}: ${txt.slice(0,200).replace(/\s+/g," ").trim()}`);
+              throw new Error(`Non-JSON from ${url}: ${txt.slice(0,200).replace(/\s+/g," ").trim()}`);
             }
             const body = JSON.parse(txt);
             if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
             if (body?.error) throw new Error(body.error);
             return Array.isArray(body?.data) ? body.data : [];
-        };
+          };
 
-        // 2) try this season; if both sides empty, fallback to last season
-        // Put this near your helpers
-        function currentSeasonEndYear(d = new Date()) {
-        // NBA seasons run Oct–Jun; "season" is named by the END year
-        const y = d.getFullYear();
-        const m = d.getMonth(); // 0=Jan ... 9=Oct
-        return (m >= 9) ? y + 1 : y; // Oct (9) or later -> next calendar year
-        }
+          function currentSeasonEndYear(d = new Date()) {
+            // NBA seasons run Oct–Jun; "season" is named by the END year
+            const y = d.getFullYear();
+            const m = d.getMonth(); // 0=Jan ... 9=Oct
+            return (m >= 9) ? y + 1 : y; // Oct (9) or later -> next calendar year
+          }
+          const thisSeason = currentSeasonEndYear();
 
-        // In your mini-averages effect:
-        const thisSeason = currentSeasonEndYear();
-
-        let [awayAvgs, homeAvgs] = await Promise.all([
+          let [awayAvgs, homeAvgs] = await Promise.all([
             callAvg(awayIds, thisSeason),
             callAvg(homeIds, thisSeason),
-        ]);
-        let usedSeason = thisSeason;
+          ]);
+          let usedSeason = thisSeason;
 
-        if ((!awayAvgs?.length) && (!homeAvgs?.length)) {
+          if ((!awayAvgs?.length) && (!homeAvgs?.length)) {
             const prev = thisSeason - 1;
             [awayAvgs, homeAvgs] = await Promise.all([
-            callAvg(awayIds, prev),
-            callAvg(homeIds, prev),
+              callAvg(awayIds, prev),
+              callAvg(homeIds, prev),
             ]);
             usedSeason = prev;
-        }
-        if (cancelled) return;
+          }
+          if (cancelled) return;
 
-        setAvgSeason(usedSeason);
+          setAvgSeason(usedSeason);
 
-        // 3) attach names for chips
-        const aMap = new Map(awayRoster.map(p => [p.id, p]));
-        const hMap = new Map(homeRoster.map(p => [p.id, p]));
-        awayAvgs.forEach(x => (x.player = aMap.get(x.player_id)));
-        homeAvgs.forEach(x => (x.player = hMap.get(x.player_id)));
+          // Attach names
+          const aMap = new Map(awayRoster.map(p => [p.id, p]));
+          const hMap = new Map(homeRoster.map(p => [p.id, p]));
+          awayAvgs.forEach(x => (x.player = aMap.get(x.player_id)));
+          homeAvgs.forEach(x => (x.player = hMap.get(x.player_id)));
 
-        // 4) pick top 3 by minutes (fallback to points)
-        const minToNum = (m) => {
+          // Top 3 by minutes, fallback by points
+          const minToNum = (m) => {
             if (!m || typeof m !== "string") return 0;
             const [mm, ss] = m.split(":").map(Number);
             return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss/60 : 0);
-        };
-        const pickTop = (arr) => {
+          };
+          const pickTop = (arr) => {
             const copy = [...arr];
             copy.sort((x, y) => {
-            const ym = minToNum(y.min), xm = minToNum(x.min);
-            if (ym !== xm) return ym - xm;
-            return (y.pts || 0) - (x.pts || 0);
+              const ym = minToNum(y.min), xm = minToNum(x.min);
+              if (ym !== xm) return ym - xm;
+              return (y.pts || 0) - (x.pts || 0);
             });
             return copy.slice(0, 3);
-        };
+          };
 
-        setMini({
+          setMini({
             loading: false,
-            error: null,
+            error: "Recent player stats unavailable (need GOAT tier or valid API key). Showing season averages.",
             data: { away: pickTop(awayAvgs), home: pickTop(homeAvgs) }
+          });
+          return; // done via fallback path
+        }
+
+        // If recent stats succeeded, take top 3 by recent minutes (already averaged)
+        const pickTopRecent = (pack) => (pack?.players || []).slice(0, 3);
+        if (cancelled) return;
+        setMini({
+          loading: false,
+          error: null,
+          data: {
+            away: pickTopRecent(awayRecent),
+            home: pickTopRecent(homeRecent),
+          }
         });
-        } catch (e) {
+        // For the accordion label; not used when in "recent" mode but harmless
+        setAvgSeason(new Date().getFullYear());
+      } catch (e) {
         if (cancelled) return;
         setMini({ loading: false, error: e?.message || String(e), data: null });
-        }
+      }
     })();
 
     return () => { cancelled = true; };
-    }, [open, game?.home?.code, game?.away?.code]);
+  }, [open, game?.home?.code, game?.away?.code]);
 
-
-  // compute probabilities
+  // ------------------ Build probabilities from the datasets ------------------
   useEffect(() => {
     if (!open) return;
     if (a.loading || b.loading) return;
@@ -992,7 +1155,7 @@ function ComparisonDrawer({ open, onClose, game }) {
     setProbs(built);
   }, [open, a.loading, b.loading, a.error, b.error, a.data, b.data, game]);
 
-  // Live polling: while the game isn't Final, poll BDL every 15s for score/quarter
+  // ------------------ Live polling (BDL game-by-id) ------------------
   useEffect(() => {
     if (!open || !game?.id) return;
 
@@ -1005,39 +1168,33 @@ function ComparisonDrawer({ open, onClose, game }) {
         if (stop) return;
 
         setLive({
-          status: g.status,               // e.g., "In Progress", "Final", "Halftime"
+          status: g.status,               // "In Progress", "Final", "Halftime"
           homeCode: g.homeCode,
           awayCode: g.awayCode,
           homeScore: g.homeScore,
           awayScore: g.awayScore,
-          period: g.period,               // number if provided
+          period: g.period,
           time: g.time,                   // "08:12" or ""
           isFinal: /final/i.test(g.status || ""),
           isLive: /in progress|end of|halftime|quarter|q\d/i.test(g.status || ""),
         });
 
-        // stop polling if final
-        if (/final/i.test(g.status || "")) return;
-
-        // schedule next tick
-        timer = setTimeout(load, 15000);
-      } catch (e) {
-        // Back off on errors but keep trying if still open & not final
-        if (!stop) timer = setTimeout(load, 20000);
+        if (/final/i.test(g.status || "")) return;         // stop when final
+        timer = setTimeout(load, 15000);                   // poll again
+      } catch {
+        if (!stop) timer = setTimeout(load, 20000);        // gentle backoff
       }
     };
 
     load();
-
-    return () => {
-      stop = true;
-      if (timer) clearTimeout(timer);
-    };
+    return () => { stop = true; if (timer) clearTimeout(timer); };
   }, [open, game?.id]);
 
-
-  // NEW: compute model verdict for this game (✔/✖ when Final & prediction exists)
+  // ✔/✖ verdict chip (only when Final)
   const verdict = verdictFromProbs(game, probs);
+
+  // Small label to reflect data mode in the Top Players accordion
+  const miniModeLabel = miniMode === "recent" ? "last 21 days" : "season averages (fallback)";
 
   return (
     <Drawer
@@ -1059,7 +1216,7 @@ function ComparisonDrawer({ open, onClose, game }) {
       {/* header */}
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-          Last 10 — {game?.away?.code} @ {game?.home?.code}
+          Recent form — {game?.away?.code} @ {game?.home?.code}
         </Typography>
 
         <Stack direction="row" spacing={1} alignItems="center">
@@ -1108,116 +1265,127 @@ function ComparisonDrawer({ open, onClose, game }) {
           verdict={verdict}
           live={live}
         />
-            {/* --- Head-to-head (this season) --- */}
-            {h2h.loading ? (
-            <Typography variant="caption" sx={{ opacity:0.7, mt:1, display:'block' }}>Loading season series…</Typography>
-            ) : h2h.error ? (
-            <Typography variant="caption" color="warning.main" sx={{ mt:1, display:'block' }}>
-                H2H error: {h2h.error}
+
+        {/* --- Head-to-head (this season) --- */}
+        {h2h.loading ? (
+          <Typography variant="caption" sx={{ opacity:0.7, mt:1, display:'block' }}>
+            Loading season series…
+          </Typography>
+        ) : h2h.error ? (
+          <Typography variant="caption" color="warning.main" sx={{ mt:1, display:'block' }}>
+            H2H error: {h2h.error}
+          </Typography>
+        ) : h2h.data ? (
+          <Typography variant="body2" sx={{ mt:1 }}>
+            Season series: <strong>{game?.home?.code} {h2h.data.aWins}–{h2h.data.bWins} {game?.away?.code}</strong>
+          </Typography>
+        ) : null}
+
+        {/* --- Top players (rolling or fallback) --- */}
+        <Accordion sx={{ mt:1.5 }} disableGutters>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
+              Top players
             </Typography>
-            ) : h2h.data ? (
-            <Typography variant="body2" sx={{ mt:1 }}>
-                Season series: <strong>{game?.home?.code} {h2h.data.aWins}–{h2h.data.bWins} {game?.away?.code}</strong>
+            <Typography variant="caption" sx={{ ml:1, opacity:0.7 }}>
+              {miniModeLabel}{miniMode === "season-fallback" ? ` ’${String(avgSeason).slice(2)}` : ""}
             </Typography>
-            ) : null}   
-
-            {/* --- Top players (mini-averages) --- */}
-            <Accordion sx={{ mt:1.5 }} disableGutters>
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
-                    Top players (’{String(avgSeason).slice(2)})
-               </Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-                {mini.loading ? (
-                <Stack alignItems="center" sx={{ py:1 }}><CircularProgress size={18} /></Stack>
-                ) : mini.error ? (
-                <Typography variant="caption" color="warning.main">Averages error: {mini.error}</Typography>
-                ) : mini.data ? (
-                <Stack spacing={1.25}>
-                    {/* Away group */}
-                    {(() => {
-                    const accent = (t) => t.palette.info.main; // away color
-                    return (
-                        <Stack direction="row" alignItems="flex-start" spacing={1}>
-                        <Chip
-                            size="small"
-                            variant="outlined"
-                            label={game?.away?.code}
-                            sx={{
-                            minWidth: 56,
-                            justifyContent: 'center',
-                            borderColor: accent,
-                            color: accent,
-                            }}
-                        />
-                        <Box
-                            sx={{
-                            flex: 1,
-                            pl: 1.5,
-                            mt: 0.25,
-                            borderLeft: '3px solid',
-                            borderColor: accent,
-                            }}
-                        >
-                            <Stack direction="column" spacing={1} sx={{ '& > *': { maxWidth: '100%' } }}>
-                            {mini.data.away.map((p) => (
-                                <PlayerPill key={`a-${p.player_id}`} avg={p} accent={accent} />
-                            ))}
-                            </Stack>
-                        </Box>
+          </AccordionSummary>
+          <AccordionDetails>
+            {mini.loading ? (
+              <Stack alignItems="center" sx={{ py:1 }}>
+                <CircularProgress size={18} />
+              </Stack>
+            ) : mini.error ? (
+              <Typography variant="caption" color="warning.main">
+                {mini.error}
+              </Typography>
+            ) : mini.data ? (
+              <Stack spacing={1.25}>
+                {/* Away group */}
+                {(() => {
+                  const accent = (t) => t.palette.info.main; // away color
+                  return (
+                    <Stack direction="row" alignItems="flex-start" spacing={1}>
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={game?.away?.code}
+                        sx={{
+                          minWidth: 56,
+                          justifyContent: 'center',
+                          borderColor: accent,
+                          color: accent,
+                        }}
+                      />
+                      <Box
+                        sx={{
+                          flex: 1,
+                          pl: 1.5,
+                          mt: 0.25,
+                          borderLeft: '3px solid',
+                          borderColor: accent,
+                        }}
+                      >
+                        <Stack direction="column" spacing={1} sx={{ '& > *': { maxWidth: '100%' } }}>
+                          {mini.data.away.map((p) => (
+                            <PlayerPill key={`a-${p.player_id}`} avg={p} accent={accent} />
+                          ))}
                         </Stack>
-                    );
-                    })()}
+                      </Box>
+                    </Stack>
+                  );
+                })()}
 
-                    {/* Home group */}
-                    {(() => {
-                    const accent = (t) => t.palette.success.main; // home color
-                    return (
-                        <Stack direction="row" alignItems="flex-start" spacing={1}>
-                        <Chip
-                            size="small"
-                            variant="outlined"
-                            label={game?.home?.code}
-                            sx={{
-                            minWidth: 56,
-                            justifyContent: 'center',
-                            borderColor: accent,
-                            color: accent,
-                            }}
-                        />
-                        <Box
-                            sx={{
-                            flex: 1,
-                            pl: 1.5,
-                            mt: 0.25,
-                            borderLeft: '3px solid',
-                            borderColor: accent,
-                            }}
-                        >
-                            <Stack direction="column" spacing={1} sx={{ '& > *': { maxWidth: '100%' } }}>
-                            {mini.data.home.map((p) => (
-                                <PlayerPill key={`h-${p.player_id}`} avg={p} accent={accent} />
-                            ))}
-                            </Stack>
-                        </Box>
+                {/* Home group */}
+                {(() => {
+                  const accent = (t) => t.palette.success.main; // home color
+                  return (
+                    <Stack direction="row" alignItems="flex-start" spacing={1}>
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={game?.home?.code}
+                        sx={{
+                          minWidth: 56,
+                          justifyContent: 'center',
+                          borderColor: accent,
+                          color: accent,
+                        }}
+                      />
+                      <Box
+                        sx={{
+                          flex: 1,
+                          pl: 1.5,
+                          mt: 0.25,
+                          borderLeft: '3px solid',
+                          borderColor: accent,
+                        }}
+                      >
+                        <Stack direction="column" spacing={1} sx={{ '& > *': { maxWidth: '100%' } }}>
+                          {mini.data.home.map((p) => (
+                            <PlayerPill key={`h-${p.player_id}`} avg={p} accent={accent} />
+                          ))}
                         </Stack>
-                    );
-                    })()}
-
-                </Stack>
-                ) : null}
-            </AccordionDetails>
-            </Accordion>
+                      </Box>
+                    </Stack>
+                  );
+                })()}
+              </Stack>
+            ) : null}
+          </AccordionDetails>
+        </Accordion>
       </Box>
 
       {/* sticky footer */}
-      <Box sx={{
-        position: 'sticky',
-        bottom: 0,
-        pt: 1.5,
-        background: (t) => `linear-gradient(180deg, ${t.palette.background.default}00, ${t.palette.background.default} 40%)`,
-      }}>
+      <Box
+        sx={{
+          position: 'sticky',
+          bottom: 0,
+          pt: 1.5,
+          background: (t) => `linear-gradient(180deg, ${t.palette.background.default}00, ${t.palette.background.default} 40%)`,
+        }}
+      >
         <Tooltip title="Close">
           <Button variant="contained" onClick={onClose} fullWidth>Close</Button>
         </Tooltip>
@@ -1225,6 +1393,7 @@ function ComparisonDrawer({ open, onClose, game }) {
     </Drawer>
   );
 }
+
 
 // --- Replace the whole resultMeta with this version ---
 function isFinal(game){
