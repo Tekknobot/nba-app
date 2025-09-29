@@ -367,6 +367,65 @@ function isoDaysAgo(n, from = new Date()){
 }
 function clampISODateOnly(iso){ return (iso || '').slice(0,10); }
 
+function lastCompletedSeasonEndYear(d = new Date()){
+  // NBA seasons end in June. If we're before July, last completed season ended last year.
+  const y = d.getFullYear();
+  const m = d.getMonth(); // 0=Jan
+  return (m >= 6) ? y : (y - 1);
+}
+
+async function fetchTeamLast10FromSeasonBDL(teamAbbr, seasonEndYear){
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+  const { start, end } = seasonDateWindow(seasonEndYear);
+
+  const u = new URL("https://api.balldontlie.io/v1/games");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("start_date", start);
+  u.searchParams.set("end_date", end);
+  u.searchParams.set("postseason", "false");
+  u.searchParams.set("per_page", "100");
+
+  const headers = bdlHeaders();
+  let page = 1, all = [];
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (r.status === 402 || r.status === 403) throw new Error("BDL paid tier required for date filters.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const data = Array.isArray(j?.data) ? j.data : [];
+    all.push(...data);
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+
+  const finals = all
+    .filter(g => (g?.status || "").toLowerCase().includes("final"))
+    .sort((a,b)=> new Date(b.date) - new Date(a.date))
+    .slice(0, 10)
+    .map(g => {
+      const home = (g.home_team?.abbreviation || "HOME").toUpperCase();
+      const away = (g.visitor_team?.abbreviation || "AWAY").toUpperCase();
+      const isHome = home === teamAbbr;
+      const my     = isHome ? g.home_team_score : g.visitor_team_score;
+      const their  = isHome ? g.visitor_team_score : g.home_team_score;
+      const result = my > their ? "W" : (my < their ? "L" : "T");
+      const opp    = isHome ? away : home;
+      const score  = `${home} ${g.home_team_score} - ${away} ${g.visitor_team_score}`;
+      return {
+        date: (g.date || "").slice(0,10),
+        opp,
+        homeAway: isHome ? "Home" : "Away",
+        result,
+        score
+      };
+    });
+
+  return { team: teamAbbr, games: finals, _source: `balldontlie:season(${start}→${end})` };
+}
+
 // ---------------------------------------------------------------------------
 async function fetchTeamSeasonPointDiffBDL(teamAbbr, seasonEndYear){
   const teamId = BDL_TEAM_ID[teamAbbr];
@@ -1164,34 +1223,47 @@ function ComparisonDrawer({ open, onClose, game }) {
   const [miniMode, setMiniMode] = useState("recent"); // "recent" | "season-fallback"
   const [avgSeason, setAvgSeason] = useState(2025);   // used when season-fallback is in play
 
-  // ------------------ Recent form (last-10 inside recent window) ------------------
-  useEffect(() => {
-    if (!open || !game?.home?.code || !game?.away?.code) return;
-    let cancelled = false;
+// ------------------ Recent form (last-10 inside recent window) with season fallback ------------------
+useEffect(() => {
+  if (!open || !game?.home?.code || !game?.away?.code) return;
+  let cancelled = false;
 
-    (async () => {
-      try {
-        setA({ loading: true, error: null, data: null });
-        setB({ loading: true, error: null, data: null });
+  (async () => {
+    try {
+      setA({ loading: true, error: null, data: null });
+      setB({ loading: true, error: null, data: null });
 
-        // Uses helper that queries /v1/games with start_date/end_date
-        const [A, B] = await Promise.all([
-          fetchTeamFormBDL(game.away.code, { days: 21 }),
-          fetchTeamFormBDL(game.home.code, { days: 21 }),
+      // 1) Try recent window
+      let [A, B] = await Promise.all([
+        fetchTeamFormBDL(game.away.code, { days: 21 }),
+        fetchTeamFormBDL(game.home.code, { days: 21 }),
+      ]);
+
+      // 2) If either side has no games (preseason/before opener), fallback to last completed season
+      const needFallback = !(A?.games?.length) || !(B?.games?.length);
+      if (needFallback) {
+        const endYear = lastCompletedSeasonEndYear();
+        const [Af, Bf] = await Promise.all([
+          fetchTeamLast10FromSeasonBDL(game.away.code, endYear),
+          fetchTeamLast10FromSeasonBDL(game.home.code, endYear),
         ]);
-        if (cancelled) return;
-        setA({ loading: false, error: null, data: A });
-        setB({ loading: false, error: null, data: B });
-      } catch (e) {
-        if (cancelled) return;
-        const msg = e?.message || String(e);
-        setA({ loading: false, error: msg, data: { team: game?.away?.code, games: [] } });
-        setB({ loading: false, error: msg, data: { team: game?.home?.code, games: [] } });
+        A = Af; B = Bf;
       }
-    })();
 
-    return () => { cancelled = true; };
-  }, [open, game?.home?.code, game?.away?.code]);
+      if (cancelled) return;
+      setA({ loading: false, error: null, data: A });
+      setB({ loading: false, error: null, data: B });
+    } catch (e) {
+      if (cancelled) return;
+      const msg = e?.message || String(e);
+      setA({ loading: false, error: msg, data: { team: game?.away?.code, games: [] } });
+      setB({ loading: false, error: msg, data: { team: game?.home?.code, games: [] } });
+    }
+  })();
+
+  return () => { cancelled = true; };
+}, [open, game?.home?.code, game?.away?.code]);
+
 
   // ------------------ Head-to-head (this season) ------------------
   useEffect(() => {
@@ -1461,6 +1533,13 @@ function ComparisonDrawer({ open, onClose, game }) {
             data={b.data}
           />
         </Stack>
+
+        {/* right under the two lists, tiny caption */}
+        {(a?.data?._source || b?.data?._source) && (
+          <Typography variant="caption" sx={{ opacity: 0.65, mt: 0.5, display:'block' }}>
+            Source: {a?.data?._source || b?.data?._source}
+          </Typography>
+        )}
 
         <ProbabilityCard
           probs={probs}
