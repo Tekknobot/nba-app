@@ -327,6 +327,12 @@ function getPredictedWinnerCode(game) {
   return null;
 }
 
+function seasonDateWindow(endYear){
+  const start = `${endYear-1}-10-01`;
+  const end   = `${endYear}-06-30`;
+  return { start, end };
+}
+
 function getActualWinnerCode(game) {
   const home = codeify(game?.home, 'HOME');
   const away = codeify(game?.away, 'AWAY');
@@ -362,6 +368,193 @@ function isoDaysAgo(n, from = new Date()){
 function clampISODateOnly(iso){ return (iso || '').slice(0,10); }
 
 // ---------------------------------------------------------------------------
+async function fetchTeamSeasonPointDiffBDL(teamAbbr, seasonEndYear){
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+
+  const { start, end } = seasonDateWindow(seasonEndYear);
+
+  const u = new URL("https://api.balldontlie.io/v1/games");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("start_date", start);
+  u.searchParams.set("end_date", end);
+  u.searchParams.set("postseason", "false");
+  u.searchParams.set("per_page", "100");
+
+  const headers = bdlHeaders();
+  let page = 1, gp = 0, sumMargin = 0;
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const data = Array.isArray(j?.data) ? j.data : [];
+
+    for (const g of data) {
+      const hs = g?.home_team_score;
+      const as = g?.visitor_team_score;
+      if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
+
+      const home = (g?.home_team?.abbreviation || "").toUpperCase();
+      const isHome = home === teamAbbr;
+      const my = isHome ? hs : as;
+      const opp = isHome ? as : hs;
+
+      gp += 1;
+      sumMargin += (my - opp); // positive if team outscored opp
+    }
+
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+
+  const diff = gp ? (sumMargin / gp) : 0; // average point differential
+  return { gp, diff };
+}
+
+async function fetchTinyPreseasonNudgeBDL(teamAbbr){
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) return 0;
+  const u = new URL("https://api.balldontlie.io/v1/games");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("start_date", isoDaysAgo(30));
+  u.searchParams.set("end_date", new Date().toISOString().slice(0,10));
+  u.searchParams.set("per_page", "100");
+
+  const headers = bdlHeaders();
+  const r = await fetch(u, { headers });
+  if (!r.ok) return 0;
+  const j = await r.json();
+  const data = Array.isArray(j?.data) ? j.data : [];
+
+  let gp = 0, sumMargin = 0;
+  for (const g of data) {
+    if (!/final/i.test(g?.status || "")) continue;
+    const hs = g?.home_team_score, as = g?.visitor_team_score;
+    if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
+    const home = (g?.home_team?.abbreviation || "").toUpperCase();
+    const isHome = home === teamAbbr;
+    const my = isHome ? hs : as;
+    const opp = isHome ? as : hs;
+    gp += 1; sumMargin += (my - opp);
+  }
+  if (!gp) return 0;
+  // tiny weight: convert to ~0.2 of its raw effect
+  return (sumMargin / gp) * 0.2;
+}
+
+function logistic(pAdv, scale = 6.5){ // scale ~ how many points ~= 75/25 swing
+  // p = 1 / (1 + e^(-pAdv/scale))
+  const z = Math.max(-50, Math.min(50, pAdv / scale));
+  return 1 / (1 + Math.exp(-z));
+}
+
+async function computePriorEdgeBDL(homeCode, awayCode){
+  // Pick last completed season as prior
+  const today = new Date();
+  const seasonEndYear = (today.getMonth() >= 9) ? today.getFullYear() : today.getFullYear(); // before tip, last completed season ended this calendar year
+  const prevSeasonEnd = seasonEndYear; // e.g., before 2024-25 starts, prev end = 2024
+
+  const [homePrev, awayPrev] = await Promise.all([
+    fetchTeamSeasonPointDiffBDL(homeCode, prevSeasonEnd),
+    fetchTeamSeasonPointDiffBDL(awayCode, prevSeasonEnd),
+  ]);
+
+  // Home-court baseline (in points)
+  const HCA = 2.3; // conservative NBA HCA estimate
+
+  // Optional tiny preseason nudge
+  const [hPre, aPre] = await Promise.all([
+    fetchTinyPreseasonNudgeBDL(homeCode),
+    fetchTinyPreseasonNudgeBDL(awayCode),
+  ]);
+
+  // Point-advantage estimate: (home prior - away prior) + HCA + preseason deltas
+  const pointAdv = (homePrev.diff - awayPrev.diff) + HCA + (hPre - aPre);
+
+  const pHome = logistic(pointAdv, 6.5);
+
+  return {
+    pHome,
+    deltas: {
+      priorDiff: +(homePrev.diff - awayPrev.diff).toFixed(2),
+      hca: +HCA.toFixed(1),
+      preseason: +(hPre - aPre).toFixed(2),
+    },
+    sources: {
+      seasonEndYear: prevSeasonEnd,
+      homeGP: homePrev.gp,
+      awayGP: awayPrev.gp,
+    }
+  };
+}
+
+async function buildProbsForGameAsync({ game, awayData, homeData }) {
+  const gameDateISO =
+    (game?._iso || "").slice(0, 10) ||
+    (game?.dateKey || "") ||
+    new Date().toISOString().slice(0, 10);
+
+  const homeGames = homeData?.games || [];
+  const awayGames = awayData?.games || [];
+
+  // If both sides have recent games, use your existing model
+  if (homeGames.length && awayGames.length) {
+    const homeSummary = summarizeLastNGames(homeGames, 10);
+    const awaySummary = summarizeLastNGames(awayGames, 10);
+    const homeRestDays = daysRestBefore(gameDateISO, homeGames);
+    const awayRestDays = daysRestBefore(gameDateISO, awayGames);
+    const homeB2B = isBackToBack(gameDateISO, homeGames);
+    const awayB2B = isBackToBack(gameDateISO, awayGames);
+
+    const P = computeGameProbabilities({
+      homeSummary,
+      awaySummary,
+      homeRestDays,
+      awayRestDays,
+      homeB2B,
+      awayB2B,
+      neutralSite: false,
+    });
+
+    return {
+      ...P,
+      mode: "recent",
+      factors: explainFactors({ homeSummary, awaySummary, deltas: P.deltas }),
+    };
+  }
+
+  // Fallback: prior-based edge
+  const homeCode = game?.home?.code;
+  const awayCode = game?.away?.code;
+  if (!homeCode || !awayCode) return null;
+
+  try {
+    const prior = await computePriorEdgeBDL(homeCode, awayCode);
+    const pct = Math.round(prior.pHome * 100);
+    return {
+      pHome: prior.pHome,
+      deltas: prior.deltas,
+      mode: "prior",
+      factors: [
+        { label: "Last season diff (H−A)", value: `${prior.deltas.priorDiff} pts/g` },
+        { label: "Home-court", value: `${prior.deltas.hca} pts` },
+        { label: "Preseason nudge", value: `${prior.deltas.preseason} pts` },
+        { label: "Season used", value: `${prior.sources.seasonEndYear}` },
+      ],
+    };
+  } catch (e) {
+    // If even priors fail (no key/tier), signal why
+    return {
+      pHome: 0.5,
+      mode: "none",
+      factors: [
+        { label: "Unavailable", value: e?.message || "No recent or prior data available" }
+      ],
+    };
+  }
+}
 
 async function fetchTeamFormBDL(teamAbbr, {
   days = 21, // use 14–28 as you like
@@ -784,6 +977,13 @@ function ProbabilityCard({ probs, homeCode, awayCode, verdict, live }) {
             <Typography variant="caption" sx={{ opacity:0.7 }}>
               (home win)
             </Typography>
+            {probs?.mode && (
+              <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
+                {probs.mode === 'recent' ? 'recent form' :
+                probs.mode === 'prior'  ? 'prior model' :
+                                          'data unavailable'}
+              </Typography>
+            )}
           </Stack>
 
           {/* Live score + period (only while in progress) */}
@@ -1146,13 +1346,17 @@ function ComparisonDrawer({ open, onClose, game }) {
     return () => { cancelled = true; };
   }, [open, game?.home?.code, game?.away?.code]);
 
-  // ------------------ Build probabilities from the datasets ------------------
+  // ------------------ Build probabilities (async; recent -> prior fallback) ------------------
   useEffect(() => {
-    if (!open) return;
-    if (a.loading || b.loading) return;
-    if (a.error || b.error) { setProbs(null); return; }
-    const built = buildProbsForGame({ game, awayData: a.data, homeData: b.data });
-    setProbs(built);
+    let cancelled = false;
+    (async () => {
+      if (!open) return;
+      if (a.loading || b.loading) return;
+      if (a.error || b.error) { setProbs(null); return; }
+      const built = await buildProbsForGameAsync({ game, awayData: a.data, homeData: b.data });
+      if (!cancelled) setProbs(built);
+    })();
+    return () => { cancelled = true; };
   }, [open, a.loading, b.loading, a.error, b.error, a.data, b.data, game]);
 
   // ------------------ Live polling (BDL game-by-id) ------------------
