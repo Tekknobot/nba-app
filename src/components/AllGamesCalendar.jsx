@@ -374,6 +374,19 @@ function lastCompletedSeasonEndYear(d = new Date()){
   return (m >= 6) ? y : (y - 1);
 }
 
+function toISODateOnly(d) { return new Date(d).toISOString().slice(0,10); }
+function windowISO({ anchorISO, days }) {
+  const anchor = anchorISO || toISODateOnly(new Date());
+  const start  = isoDaysAgo(days, new Date(anchor));
+  return { start, end: anchor };
+}
+function lastCompletedSeasonEndYearAt(anchor = new Date()){
+  // season ends in June; if anchor is after June, last completed season ended this year, else last year
+  const y = anchor.getFullYear();
+  const m = anchor.getMonth(); // 0=Jan … 11=Dec
+  return (m >= 6) ? y : (y - 1);
+}
+
 async function fetchTeamLast10FromSeasonBDL(teamAbbr, seasonEndYear){
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
@@ -616,14 +629,12 @@ async function buildProbsForGameAsync({ game, awayData, homeData }) {
 }
 
 async function fetchTeamFormBDL(teamAbbr, {
-  days = 21, // use 14–28 as you like
-  includePostseason = false
-} = {}) {
+   days = 21, includePostseason = false, anchorISO = null
+ } = {}) {
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
 
-  const start_date = isoDaysAgo(days);
-  const end_date   = new Date().toISOString().slice(0,10);
+  const { start: start_date, end: end_date } = windowISO({ anchorISO, days });
 
   // /v1/games supports team_ids[], start_date, end_date, postseason
   const u = new URL("https://api.balldontlie.io/v1/games");
@@ -671,15 +682,18 @@ async function fetchTeamFormBDL(teamAbbr, {
   return { team: teamAbbr, games, _source: `balldontlie:recent(${start_date}→${end_date})` };
 }
 
+async function fetchTeamLast10FromSeasonAtBDL(teamAbbr, anchorISO){
+  const endYear = lastCompletedSeasonEndYearAt(new Date(anchorISO));
+  return fetchTeamLast10FromSeasonBDL(teamAbbr, endYear);
+}
+
 async function fetchRecentPlayerAveragesBDL(teamAbbr, {
-  days = 21, // pick your window
-  seasonEndYear = 2025,
-} = {}) {
+   days = 21, seasonEndYear = 2025, anchorISO = null,
+ } = {}) {
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
 
-  const start_date = isoDaysAgo(days);
-  const end_date   = new Date().toISOString().slice(0,10);
+  const { start: start_date, end: end_date } = windowISO({ anchorISO, days });
 
   // Pull recent box-score level rows, aggregated client-side by player_id.
   // /v1/stats supports team_ids[], start_date, end_date, postseason=false
@@ -1214,6 +1228,8 @@ function ComparisonDrawer({ open, onClose, game }) {
   const [b, setB] = useState({ loading: true, error: null, data: null }); // home recent form
   const [probs, setProbs] = useState(null);
   const [live, setLive] = useState(null);
+  const gameAnchorISO = (game?._iso || "").slice(0,10) || (game?.dateKey || toISODateOnly(new Date()));
+  const isInPast = new Date(gameAnchorISO) < new Date(toISODateOnly(new Date()));
 
   // head-to-head
   const [h2h, setH2h] = useState({ loading: true, error: null, data: null });
@@ -1233,19 +1249,18 @@ useEffect(() => {
       setA({ loading: true, error: null, data: null });
       setB({ loading: true, error: null, data: null });
 
-      // 1) Try recent window
+      // 1) Try recent window anchored to the game date
       let [A, B] = await Promise.all([
-        fetchTeamFormBDL(game.away.code, { days: 21 }),
-        fetchTeamFormBDL(game.home.code, { days: 21 }),
+        fetchTeamFormBDL(game.away.code, { days: 21, anchorISO: gameAnchorISO }),
+        fetchTeamFormBDL(game.home.code, { days: 21, anchorISO: gameAnchorISO }),
       ]);
 
-      // 2) If either side has no games (preseason/before opener), fallback to last completed season
+      // 2) If either side has no games (preseason/before opener), fallback to last completed season AT the anchor date
       const needFallback = !(A?.games?.length) || !(B?.games?.length);
       if (needFallback) {
-        const endYear = lastCompletedSeasonEndYear();
         const [Af, Bf] = await Promise.all([
-          fetchTeamLast10FromSeasonBDL(game.away.code, endYear),
-          fetchTeamLast10FromSeasonBDL(game.home.code, endYear),
+          fetchTeamLast10FromSeasonAtBDL(game.away.code, gameAnchorISO),
+          fetchTeamLast10FromSeasonAtBDL(game.home.code, gameAnchorISO),
         ]);
         A = Af; B = Bf;
       }
@@ -1262,7 +1277,7 @@ useEffect(() => {
   })();
 
   return () => { cancelled = true; };
-}, [open, game?.home?.code, game?.away?.code]);
+}, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
 
 
   // ------------------ Head-to-head (this season) ------------------
@@ -1283,140 +1298,140 @@ useEffect(() => {
     return () => { cancelled = true; };
   }, [open, game?.home?.code, game?.away?.code]);
 
-  // ------------------ Rolling recent player averages (fallback to season) ------------------
-  useEffect(() => {
-    if (!open || !game?.home?.code || !game?.away?.code) return;
-    let cancelled = false;
+// ------------------ Rolling recent player averages (fallback to season) ------------------
+useEffect(() => {
+  if (!open || !game?.home?.code || !game?.away?.code) return;
+  let cancelled = false;
 
-    (async () => {
+  (async () => {
+    try {
+      setMini({ loading: true, error: null, data: null });
+      setMiniMode("recent");
+
+      // First try the recent window via /v1/stats anchored to the game date
+      let awayRecent, homeRecent;
       try {
-        setMini({ loading: true, error: null, data: null });
-        setMiniMode("recent");
+        [awayRecent, homeRecent] = await Promise.all([
+          fetchRecentPlayerAveragesBDL(game.away.code, { days: 21, anchorISO: gameAnchorISO }),
+          fetchRecentPlayerAveragesBDL(game.home.code, { days: 21, anchorISO: gameAnchorISO }),
+        ]);
+      } catch (tierErr) {
+        // Likely API key/tier limits -> fall back to season averages via your proxy
+        setMiniMode("season-fallback");
 
-        // First try the recent window via /v1/stats
-        let awayRecent, homeRecent;
-        try {
-          [awayRecent, homeRecent] = await Promise.all([
-            fetchRecentPlayerAveragesBDL(game.away.code, { days: 21 }),
-            fetchRecentPlayerAveragesBDL(game.home.code, { days: 21 }),
-          ]);
-        } catch (tierErr) {
-          // Likely API key/tier limits -> fall back to season averages via your proxy
-          setMiniMode("season-fallback");
-
-          // 1) Rosters (get BDL IDs from here)
-          const [awayRoster, homeRoster] = await Promise.all([
-            fetchTeamRosterByTeamIdBDL(game.away.code),
-            fetchTeamRosterByTeamIdBDL(game.home.code),
-          ]);
-          if (cancelled) return;
-
-          const normIds = (arr) =>
-            Array.from(new Set((arr || [])
-              .map(p => Number(p?.id))
-              .filter(n => Number.isInteger(n) && n > 0)))
-              .slice(0, 30);
-
-          const awayIds = normIds(awayRoster);
-          const homeIds = normIds(homeRoster);
-
-          // Proxy call for season_averages (unchanged from your version)
-          const callAvg = async (ids, season) => {
-            if (!ids.length) return [];
-            const qs = new URLSearchParams({ season: String(season) });
-            ids.forEach(id => qs.append("player_id", String(id)));
-            const base = (typeof API_BASE === "string" && API_BASE) ? API_BASE : "";
-            const url = `${base}/api/bdl/season-averages?${qs.toString()}`;
-
-            const res = await fetch(url, { cache: "no-store" });
-            const ct = (res.headers.get("content-type") || "").toLowerCase();
-            const txt = await res.text();
-            if (!ct.includes("application/json")) {
-              throw new Error(`Non-JSON from ${url}: ${txt.slice(0,200).replace(/\s+/g," ").trim()}`);
-            }
-            const body = JSON.parse(txt);
-            if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
-            if (body?.error) throw new Error(body.error);
-            return Array.isArray(body?.data) ? body.data : [];
-          };
-
-          function currentSeasonEndYear(d = new Date()) {
-            // NBA seasons run Oct–Jun; "season" is named by the END year
-            const y = d.getFullYear();
-            const m = d.getMonth(); // 0=Jan ... 9=Oct
-            return (m >= 9) ? y + 1 : y; // Oct (9) or later -> next calendar year
-          }
-          const thisSeason = currentSeasonEndYear();
-
-          let [awayAvgs, homeAvgs] = await Promise.all([
-            callAvg(awayIds, thisSeason),
-            callAvg(homeIds, thisSeason),
-          ]);
-          let usedSeason = thisSeason;
-
-          if ((!awayAvgs?.length) && (!homeAvgs?.length)) {
-            const prev = thisSeason - 1;
-            [awayAvgs, homeAvgs] = await Promise.all([
-              callAvg(awayIds, prev),
-              callAvg(homeIds, prev),
-            ]);
-            usedSeason = prev;
-          }
-          if (cancelled) return;
-
-          setAvgSeason(usedSeason);
-
-          // Attach names
-          const aMap = new Map(awayRoster.map(p => [p.id, p]));
-          const hMap = new Map(homeRoster.map(p => [p.id, p]));
-          awayAvgs.forEach(x => (x.player = aMap.get(x.player_id)));
-          homeAvgs.forEach(x => (x.player = hMap.get(x.player_id)));
-
-          // Top 3 by minutes, fallback by points
-          const minToNum = (m) => {
-            if (!m || typeof m !== "string") return 0;
-            const [mm, ss] = m.split(":").map(Number);
-            return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss/60 : 0);
-          };
-          const pickTop = (arr) => {
-            const copy = [...arr];
-            copy.sort((x, y) => {
-              const ym = minToNum(y.min), xm = minToNum(x.min);
-              if (ym !== xm) return ym - xm;
-              return (y.pts || 0) - (x.pts || 0);
-            });
-            return copy.slice(0, 3);
-          };
-
-          setMini({
-            loading: false,
-            error: "Recent player stats unavailable (need GOAT tier or valid API key). Showing season averages.",
-            data: { away: pickTop(awayAvgs), home: pickTop(homeAvgs) }
-          });
-          return; // done via fallback path
-        }
-
-        // If recent stats succeeded, take top 3 by recent minutes (already averaged)
-        const pickTopRecent = (pack) => (pack?.players || []).slice(0, 3);
+        // 1) Rosters (get BDL IDs from here)
+        const [awayRoster, homeRoster] = await Promise.all([
+          fetchTeamRosterByTeamIdBDL(game.away.code),
+          fetchTeamRosterByTeamIdBDL(game.home.code),
+        ]);
         if (cancelled) return;
+
+        const normIds = (arr) =>
+          Array.from(new Set((arr || [])
+            .map(p => Number(p?.id))
+            .filter(n => Number.isInteger(n) && n > 0)))
+            .slice(0, 30);
+
+        const awayIds = normIds(awayRoster);
+        const homeIds = normIds(homeRoster);
+
+        // Proxy call for season_averages (unchanged from your version)
+        const callAvg = async (ids, season) => {
+          if (!ids.length) return [];
+          const qs = new URLSearchParams({ season: String(season) });
+          ids.forEach(id => qs.append("player_id", String(id)));
+          const base = (typeof API_BASE === "string" && API_BASE) ? API_BASE : "";
+          const url = `${base}/api/bdl/season-averages?${qs.toString()}`;
+
+          const res = await fetch(url, { cache: "no-store" });
+          const ct = (res.headers.get("content-type") || "").toLowerCase();
+          const txt = await res.text();
+          if (!ct.includes("application/json")) {
+            throw new Error(`Non-JSON from ${url}: ${txt.slice(0,200).replace(/\s+/g," ").trim()}`);
+          }
+          const body = JSON.parse(txt);
+          if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
+          if (body?.error) throw new Error(body.error);
+          return Array.isArray(body?.data) ? body.data : [];
+        };
+
+        function currentSeasonEndYear(d = new Date()) {
+          // NBA seasons run Oct–Jun; "season" is named by the END year
+          const y = d.getFullYear();
+          const m = d.getMonth(); // 0=Jan ... 9=Oct
+          return (m >= 9) ? y + 1 : y; // Oct (9) or later -> next calendar year
+        }
+        const thisSeason = currentSeasonEndYear();
+
+        let [awayAvgs, homeAvgs] = await Promise.all([
+          callAvg(awayIds, thisSeason),
+          callAvg(homeIds, thisSeason),
+        ]);
+        let usedSeason = thisSeason;
+
+        if ((!awayAvgs?.length) && (!homeAvgs?.length)) {
+          const prev = thisSeason - 1;
+          [awayAvgs, homeAvgs] = await Promise.all([
+            callAvg(awayIds, prev),
+            callAvg(homeIds, prev),
+          ]);
+          usedSeason = prev;
+        }
+        if (cancelled) return;
+
+        setAvgSeason(usedSeason);
+
+        // Attach names
+        const aMap = new Map(awayRoster.map(p => [p.id, p]));
+        const hMap = new Map(homeRoster.map(p => [p.id, p]));
+        awayAvgs.forEach(x => (x.player = aMap.get(x.player_id)));
+        homeAvgs.forEach(x => (x.player = hMap.get(x.player_id)));
+
+        // Top 3 by minutes, fallback by points
+        const minToNum = (m) => {
+          if (!m || typeof m !== "string") return 0;
+          const [mm, ss] = m.split(":").map(Number);
+          return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss/60 : 0);
+        };
+        const pickTop = (arr) => {
+          const copy = [...arr];
+          copy.sort((x, y) => {
+            const ym = minToNum(y.min), xm = minToNum(x.min);
+            if (ym !== xm) return ym - xm;
+            return (y.pts || 0) - (x.pts || 0);
+          });
+          return copy.slice(0, 3);
+        };
+
         setMini({
           loading: false,
-          error: null,
-          data: {
-            away: pickTopRecent(awayRecent),
-            home: pickTopRecent(homeRecent),
-          }
+          error: "Recent player stats unavailable (need GOAT tier or valid API key). Showing season averages.",
+          data: { away: pickTop(awayAvgs), home: pickTop(homeAvgs) }
         });
-        // For the accordion label; not used when in "recent" mode but harmless
-        setAvgSeason(new Date().getFullYear());
-      } catch (e) {
-        if (cancelled) return;
-        setMini({ loading: false, error: e?.message || String(e), data: null });
+        return; // done via fallback path
       }
-    })();
 
-    return () => { cancelled = true; };
-  }, [open, game?.home?.code, game?.away?.code]);
+      // If recent stats succeeded, take top 3 by recent minutes (already averaged)
+      const pickTopRecent = (pack) => (pack?.players || []).slice(0, 3);
+      if (cancelled) return;
+      setMini({
+        loading: false,
+        error: null,
+        data: {
+          away: pickTopRecent(awayRecent),
+          home: pickTopRecent(homeRecent),
+        }
+      });
+      // For the accordion label; not used when in "recent" mode but harmless
+      setAvgSeason(new Date().getFullYear());
+    } catch (e) {
+      if (cancelled) return;
+      setMini({ loading: false, error: e?.message || String(e), data: null });
+    }
+  })();
+
+  return () => { cancelled = true; };
+}, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
 
   // ------------------ Build probabilities (async; recent -> prior fallback) ------------------
   useEffect(() => {
@@ -1434,6 +1449,7 @@ useEffect(() => {
   // ------------------ Live polling (BDL game-by-id) ------------------
   useEffect(() => {
     if (!open || !game?.id) return;
+    if (isInPast) return; // do not poll historic games
 
     let stop = false;
     let timer = null;
@@ -1464,7 +1480,7 @@ useEffect(() => {
 
     load();
     return () => { stop = true; if (timer) clearTimeout(timer); };
-  }, [open, game?.id]);
+  }, [open, game?.id, isInPast]);
 
   // ✔/✖ verdict chip (only when Final)
   const verdict = verdictFromProbs(game, probs);
@@ -1534,12 +1550,10 @@ useEffect(() => {
           />
         </Stack>
 
-        {/* right under the two lists, tiny caption */}
-        {(a?.data?._source || b?.data?._source) && (
-          <Typography variant="caption" sx={{ opacity: 0.65, mt: 0.5, display:'block' }}>
-            Source: {a?.data?._source || b?.data?._source}
-          </Typography>
-        )}
+        {/* recent window anchor caption */}
+        <Typography variant="caption" sx={{ opacity: 0.65, mt: 0.25, display:'block' }}>
+          Recent window ends: {gameAnchorISO} (last 21 days)
+        </Typography>
 
         <ProbabilityCard
           probs={probs}
