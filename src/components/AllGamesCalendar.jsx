@@ -1372,30 +1372,17 @@ useEffect(() => {
       setA({ loading: true, error: null, data: null });
       setB({ loading: true, error: null, data: null });
 
-      // 1) Recent 21-day window anchored to the game date
+      // Always pull the last 10 from THIS season up to the selected date
       let [Ares, Bres] = await Promise.all([
-        fetchTeamFormBDL(game.away.code, { days: 21, anchorISO: gameAnchorISO }),
-        fetchTeamFormBDL(game.home.code, { days: 21, anchorISO: gameAnchorISO }),
+        fetchTeamLast10UpToBDL(game.away.code, gameAnchorISO),
+        fetchTeamLast10UpToBDL(game.home.code, gameAnchorISO),
       ]);
 
-      // 2) Top up to "last 10 of THIS season up to anchor" if needed
-      const needTopUpA = !(Ares?.games?.length >= 10);
-      const needTopUpB = !(Bres?.games?.length >= 10);
-
-      if (needTopUpA || needTopUpB) {
-        const [At, Bt] = await Promise.all([
-          fetchTeamLast10UpToBDL(game.away.code, gameAnchorISO),
-          fetchTeamLast10UpToBDL(game.home.code, gameAnchorISO),
-        ]);
-        if (At?.games) Ares = At; // use whatever the current season actually has (even if <10)
-        if (Bt?.games) Bres = Bt;
-      }
-
-      // 3) If BOTH sides are empty up to the anchor, just show a message (no fallback)
+      // If BOTH sides have zero, show a friendly message (no previous-season fallback)
       const bothEmpty = !(Ares?.games?.length) && !(Bres?.games?.length);
       if (bothEmpty) {
         if (cancelled) return;
-        const msg = `No games yet this season as of ${gameAnchorISO}.`;
+        const msg = `No games this season as of ${gameAnchorISO}.`;
         setA({ loading: false, error: msg, data: { team: game?.away?.code, games: [] } });
         setB({ loading: false, error: msg, data: { team: game?.home?.code, games: [] } });
         return;
@@ -1422,7 +1409,8 @@ useEffect(() => {
     (async () => {
       try {
         setH2h({ loading: true, error: null, data: null });
-        const { aWins, bWins } = await fetchHeadToHeadBDL(game.home.code, game.away.code);
+        const { start, end } = seasonWindowUpTo(gameAnchorISO);
+        const { aWins, bWins } = await fetchHeadToHeadBDL(game.home.code, game.away.code, { start, end });
         if (cancelled) return;
         setH2h({ loading: false, error: null, data: { aWins, bWins } });
       } catch (e) {
@@ -1431,7 +1419,8 @@ useEffect(() => {
       }
     })();
     return () => { cancelled = true; };
-  }, [open, game?.home?.code, game?.away?.code]);
+  }, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
+
 
 // ------------------ Rolling recent player averages (fallback to season) ------------------
 useEffect(() => {
@@ -1687,7 +1676,7 @@ useEffect(() => {
 
         {/* recent window anchor caption */}
         <Typography variant="caption" sx={{ opacity: 0.65, mt: 0.25, display:'block' }}>
-          Recent window ends: {gameAnchorISO} (last 21 days)
+          Showing last 10 this season up to {gameAnchorISO}
         </Typography>
 
         <ProbabilityCard
