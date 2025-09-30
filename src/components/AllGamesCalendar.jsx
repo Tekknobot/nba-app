@@ -393,6 +393,67 @@ function lastCompletedSeasonEndYearAt(anchor = new Date()){
   return (m >= 6) ? y : (y - 1);
 }
 
+function seasonWindowUpTo(anchorISO){
+  const d = new Date(anchorISO || new Date());
+  const endYear = (d.getMonth() >= 9) ? d.getFullYear() + 1 : d.getFullYear(); // season named by END year
+  const start = `${endYear - 1}-10-01`;
+  const end   = clampISODateOnly(anchorISO) || `${endYear}-06-30`;
+  return { start, end, endYear };
+}
+
+async function fetchTeamLast10UpToBDL(teamAbbr, anchorISO){
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+
+  const { start, end } = seasonWindowUpTo(anchorISO);
+
+  const u = new URL("https://api.balldontlie.io/v1/games");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("start_date", start);
+  u.searchParams.set("end_date", end);
+  u.searchParams.set("postseason", "false");
+  u.searchParams.set("per_page", "100");
+
+  const headers = bdlHeaders();
+  let page = 1, all = [];
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const data = Array.isArray(j?.data) ? j.data : [];
+    all.push(...data);
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+
+  const finals = all
+    .filter(g => (g?.status || "").toLowerCase().includes("final"))
+    .filter(g => clampISODateOnly(g?.date) <= clampISODateOnly(end))
+    .sort((a,b)=> new Date(b.date) - new Date(a.date))
+    .slice(0, 10)
+    .map(g => {
+      const home = (g.home_team?.abbreviation || "HOME").toUpperCase();
+      const away = (g.visitor_team?.abbreviation || "AWAY").toUpperCase();
+      const isHome = home === teamAbbr;
+      const my     = isHome ? g.home_team_score : g.visitor_team_score;
+      const their  = isHome ? g.visitor_team_score : g.home_team_score;
+      const result = my > their ? "W" : (my < their ? "L" : "T");
+      const opp    = isHome ? away : home;
+      const score  = `${home} ${g.home_team_score} - ${away} ${g.visitor_team_score}`;
+      return {
+        date: clampISODateOnly(g.date),
+        opp,
+        homeAway: isHome ? "Home" : "Away",
+        result,
+        score
+      };
+    });
+
+  return { team: teamAbbr, games: finals, _source: `balldontlie:seasonTo(${end})` };
+}
+
 async function fetchTeamLast10FromSeasonBDL(teamAbbr, seasonEndYear){
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
@@ -1297,24 +1358,37 @@ useEffect(() => {
       setB({ loading: true, error: null, data: null });
 
       // 1) Try recent window anchored to the game date
-      let [A, B] = await Promise.all([
+      let [Ares, Bres] = await Promise.all([
         fetchTeamFormBDL(game.away.code, { days: 21, anchorISO: gameAnchorISO }),
         fetchTeamFormBDL(game.home.code, { days: 21, anchorISO: gameAnchorISO }),
       ]);
 
-      // 2) If either side has no games (preseason/before opener), fallback to last completed season AT the anchor date
-      const needFallback = !(A?.games?.length) || !(B?.games?.length);
-      if (needFallback) {
+      // 2) Top up to last 10 of THIS SEASON up to the anchor date if needed
+      const needTopUpA = !(Ares?.games?.length >= 10);
+      const needTopUpB = !(Bres?.games?.length >= 10);
+
+      if (needTopUpA || needTopUpB) {
+        const [At, Bt] = await Promise.all([
+          fetchTeamLast10UpToBDL(game.away.code, gameAnchorISO),
+          fetchTeamLast10UpToBDL(game.home.code, gameAnchorISO),
+        ]);
+        if (At?.games?.length) Ares = At;
+        if (Bt?.games?.length) Bres = Bt;
+      }
+
+      // 3) If still empty, fall back to last completed season at the anchor date
+      const needPrevSeasonFallback = !(Ares?.games?.length) || !(Bres?.games?.length);
+      if (needPrevSeasonFallback) {
         const [Af, Bf] = await Promise.all([
           fetchTeamLast10FromSeasonAtBDL(game.away.code, gameAnchorISO),
           fetchTeamLast10FromSeasonAtBDL(game.home.code, gameAnchorISO),
         ]);
-        A = Af; B = Bf;
+        Ares = Af; Bres = Bf;
       }
 
       if (cancelled) return;
-      setA({ loading: false, error: null, data: A });
-      setB({ loading: false, error: null, data: B });
+      setA({ loading: false, error: null, data: Ares });
+      setB({ loading: false, error: null, data: Bres });
     } catch (e) {
       if (cancelled) return;
       const msg = e?.message || String(e);
@@ -1324,8 +1398,8 @@ useEffect(() => {
   })();
 
   return () => { cancelled = true; };
+  // Make sure these deps are present so the effect refreshes correctly.
 }, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
-
 
   // ------------------ Head-to-head (this season) ------------------
   useEffect(() => {
