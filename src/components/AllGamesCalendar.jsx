@@ -594,6 +594,7 @@ async function buildProbsForGameAsync({ game, awayData, homeData }) {
       ...P,
       mode: "recent",
       factors: explainFactors({ homeSummary, awaySummary, deltas: P.deltas }),
+      provenance: `Recent-form model using balldontlie results from the last 21 days (anchored to ${gameDateISO}). Features include each team’s last-10 summary, days of rest, and back-to-back flags.`,
     };
   }
 
@@ -624,6 +625,7 @@ async function buildProbsForGameAsync({ game, awayData, homeData }) {
       factors: [
         { label: "Unavailable", value: e?.message || "No recent or prior data available" }
       ],
+      provenance: `Data unavailable from balldontlie for recent form and priors; showing neutral 50/50.`,
     };
   }
 }
@@ -1120,6 +1122,12 @@ function ProbabilityCard({ probs, homeCode, awayCode, verdict, live }) {
         <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
           <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
         </Box>
+
+        {probs.provenance && (
+          <Typography variant="caption" sx={{ display:'block', opacity:0.75, mt:1 }}>
+            {probs.provenance}
+          </Typography>
+        )}
 
         <List dense sx={{ mt:1 }}>
           {probs.factors.map((f, i) => (
