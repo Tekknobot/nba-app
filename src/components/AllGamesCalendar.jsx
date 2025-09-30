@@ -589,6 +589,21 @@ function logistic(pAdv, scale = 6.5){ // scale ~ how many points ~= 75/25 swing
   return 1 / (1 + Math.exp(-z));
 }
 
+function seasonBoundsFor(anchorISO){
+  const d = new Date(anchorISO || new Date());
+  const y = d.getFullYear();
+  const m = d.getMonth(); // 0..11
+  const endYear = (m >= 9) ? y + 1 : y; // season named by END year
+  const start = new Date(`${endYear - 1}-10-01T00:00:00Z`);
+  const end   = new Date(`${endYear}-06-30T23:59:59Z`);
+  return { start, end, endYear };
+}
+function isWithinSeason(anchorISO){
+  const a = new Date(anchorISO || new Date());
+  const { start, end } = seasonBoundsFor(anchorISO);
+  return a >= start && a <= end;
+}
+
 async function computePriorEdgeBDL(homeCode, awayCode){
   // Pick last completed season as prior
   const today = new Date();
@@ -1357,13 +1372,13 @@ useEffect(() => {
       setA({ loading: true, error: null, data: null });
       setB({ loading: true, error: null, data: null });
 
-      // 1) Try recent window anchored to the game date
+      // 1) Recent 21-day window anchored to the game date
       let [Ares, Bres] = await Promise.all([
         fetchTeamFormBDL(game.away.code, { days: 21, anchorISO: gameAnchorISO }),
         fetchTeamFormBDL(game.home.code, { days: 21, anchorISO: gameAnchorISO }),
       ]);
 
-      // 2) Top up to last 10 of THIS SEASON up to the anchor date if needed
+      // 2) Top up to "last 10 of THIS season up to anchor" if needed
       const needTopUpA = !(Ares?.games?.length >= 10);
       const needTopUpB = !(Bres?.games?.length >= 10);
 
@@ -1372,13 +1387,14 @@ useEffect(() => {
           fetchTeamLast10UpToBDL(game.away.code, gameAnchorISO),
           fetchTeamLast10UpToBDL(game.home.code, gameAnchorISO),
         ]);
-        if (At?.games?.length) Ares = At;
-        if (Bt?.games?.length) Bres = Bt;
+        if (At?.games) Ares = At; // use whatever the current season actually has (even if <10)
+        if (Bt?.games) Bres = Bt;
       }
 
-      // 3) If still empty, fall back to last completed season at the anchor date
-      const needPrevSeasonFallback = !(Ares?.games?.length) || !(Bres?.games?.length);
-      if (needPrevSeasonFallback) {
+      // 3) Only if we're OUTSIDE the season window AND both sides have 0, use last completed season
+      const insideSeason = isWithinSeason(gameAnchorISO);
+      const bothEmpty = !(Ares?.games?.length) && !(Bres?.games?.length);
+      if (!insideSeason && bothEmpty) {
         const [Af, Bf] = await Promise.all([
           fetchTeamLast10FromSeasonAtBDL(game.away.code, gameAnchorISO),
           fetchTeamLast10FromSeasonAtBDL(game.home.code, gameAnchorISO),
@@ -1398,7 +1414,6 @@ useEffect(() => {
   })();
 
   return () => { cancelled = true; };
-  // Make sure these deps are present so the effect refreshes correctly.
 }, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
 
   // ------------------ Head-to-head (this season) ------------------
