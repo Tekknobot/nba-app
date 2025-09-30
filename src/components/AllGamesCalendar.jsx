@@ -1142,7 +1142,7 @@ function buildProbsForGame({ game, awayData, homeData }) {
   };
 }
 
-function ProbabilityCard({ probs, homeCode, awayCode, verdict, live }) {
+function ProbabilityCard({ probs, homeCode, awayCode, verdict }) {
   if (!probs) return null;
   const pct = Math.round(probs.pHome * 100);
 
@@ -1166,29 +1166,6 @@ function ProbabilityCard({ probs, homeCode, awayCode, verdict, live }) {
               </Typography>
             )}
           </Stack>
-
-          {/* Live score + period (only while in progress) */}
-          {live?.isLive && (
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
-              <Chip
-                size="small"
-                color="warning"
-                variant="outlined"
-                label={
-                  `${homeCode} ${live.homeScore ?? '-'} — ${awayCode} ${live.awayScore ?? '-'}`
-                }
-              />
-              <Chip
-                size="small"
-                variant="outlined"
-                label={
-                  live.time
-                    ? (live.period ? `Q${live.period} · ${live.time}` : live.time)
-                    : (live.period ? `Q${live.period}` : (live.status || 'Live'))
-                }
-              />
-            </Stack>
-          )}
 
           {/* ✔ / ✖ only if we have a verdict */}
           {verdict && (
@@ -1684,7 +1661,6 @@ useEffect(() => {
           homeCode={game?.home?.code}
           awayCode={game?.away?.code}
           verdict={verdict}
-          live={live}
         />
 
         {/* --- Head-to-head (this season) --- */}
@@ -1909,44 +1885,68 @@ function GameCard({ game, onPick }) {
   const vsLabel = `${game.away.code} @ ${game.home.code}`;
   const sub = `${game.away.name} at ${game.home.name}`;
   const final = resultMeta(game);
+  const isLive = /in progress|halftime|end of|quarter|q\d/i.test(
+    (game?.status || "").toLowerCase()
+  );
+
+  // Short status helper for live games (keeps chips compact)
+  const liveStatusLabel = (() => {
+    const s = String(game?.status || "");
+    // Common trims like "End of 3rd Qtr" -> "End Q3"
+    const m = s.match(/end of\s*(\d)/i);
+    if (m) return `End Q${m[1]}`;
+    return s; // "In Progress", "Halftime", etc.
+  })();
 
   return (
-    <Card variant="outlined" sx={{ borderRadius:1 }}>
+    <Card variant="outlined" sx={{ borderRadius: 1 }}>
       <ListItemButton
         onClick={onPick}
         sx={{
-          borderRadius:1,
-          '&:hover': { bgcolor: 'rgba(25,118,210,0.06)' }
+          borderRadius: 1,
+          "&:hover": { bgcolor: "rgba(25,118,210,0.06)" },
         }}
       >
         <Stack
           direction="row"
-          alignItems="flex-start"              // let text take 2 lines if needed
+          alignItems="flex-start" // let text take 2 lines if needed
           spacing={1}
-          sx={{ width:'100%' }}
+          sx={{ width: "100%" }}
         >
-          <Avatar sx={{ width:30, height:30, fontSize:12, bgcolor:'primary.main', color:'primary.contrastText' }}>
+          <Avatar
+            sx={{
+              width: 30,
+              height: 30,
+              fontSize: 12,
+              bgcolor: "primary.main",
+              color: "primary.contrastText",
+            }}
+          >
             {game.home.code}
           </Avatar>
 
           {/* TEXT COLUMN */}
-          <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
+          <Box sx={{ flex: "1 1 auto", minWidth: 0 }}>
             <Typography
               variant="body2"
               sx={{
                 fontWeight: 700,
-                wordBreak: 'break-word',
-                overflow: 'hidden',
-                display: '-webkit-box',
-                WebkitLineClamp: 1,            // title stays to 1 line
-                WebkitBoxOrient: 'vertical',
+                wordBreak: "break-word",
+                overflow: "hidden",
+                display: "-webkit-box",
+                WebkitLineClamp: 1, // title stays to 1 line
+                WebkitBoxOrient: "vertical",
               }}
             >
               {final ? (
                 <>
-                  <span style={{ fontWeight: final.homeWon ? 800 : 600 }}>{game.home.code}</span>
-                  {' vs '}
-                  <span style={{ fontWeight: !final.homeWon ? 800 : 600 }}>{game.away.code}</span>
+                  <span style={{ fontWeight: final.homeWon ? 800 : 600 }}>
+                    {game.home.code}
+                  </span>
+                  {" vs "}
+                  <span style={{ fontWeight: !final.homeWon ? 800 : 600 }}>
+                    {game.away.code}
+                  </span>
                 </>
               ) : (
                 vsLabel
@@ -1957,86 +1957,107 @@ function GameCard({ game, onPick }) {
               variant="caption"
               sx={{
                 opacity: 0.8,
-                wordBreak: 'break-word',
-                whiteSpace: 'normal',          // allow wrapping
-                overflow: 'hidden',
-                display: '-webkit-box',
-                WebkitLineClamp: 2,            // clamp to 2 lines on mobile
-                WebkitBoxOrient: 'vertical',
+                wordBreak: "break-word",
+                whiteSpace: "normal", // allow wrapping
+                overflow: "hidden",
+                display: "-webkit-box",
+                WebkitLineClamp: 2, // clamp to 2 lines on mobile
+                WebkitBoxOrient: "vertical",
               }}
             >
               {sub}
             </Typography>
           </Box>
 
-            {/* RIGHT CHIP(S) – don't let these shrink */}
-            {final ? (
+          {/* RIGHT CHIP(S) – don't let these shrink */}
+          {final ? (
             <Stack
-                direction="row"
-                spacing={1}
-                sx={{ flexShrink: 0, alignItems: 'flex-start' }}
+              direction="row"
+              spacing={1}
+              sx={{ flexShrink: 0, alignItems: "flex-start" }}
             >
-                {/* Final status */}
-                <Chip size="small" color="success" label="Final" />
+              {/* Final status */}
+              <Chip size="small" color="success" label="Final" />
 
-                {/* Stacked score */}
-                <Box
+              {/* Stacked score */}
+              <Box
                 sx={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-end',
-                    lineHeight: 1.15,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-end",
+                  lineHeight: 1.15,
                 }}
                 aria-label="Final score"
-                >
+              >
                 <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    {final.lines[0]}
+                  {final.lines[0]}
                 </Typography>
                 <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                    {final.lines[1]}
+                  {final.lines[1]}
                 </Typography>
-                </Box>
+              </Box>
 
-                {/* Model verdict near the right edge */}
-                {(() => {
+              {/* Model verdict near the right edge */}
+              {(() => {
                 const verdict = modelVerdict(game);
                 if (!verdict) return null;
 
-                return verdict.state === 'correct' ? (
-                    <Tooltip title={verdict.tooltip}>
+                return verdict.state === "correct" ? (
+                  <Tooltip title={verdict.tooltip}>
                     <Chip
-                        size="small"
-                        color="success"
-                        variant="outlined"
-                        icon={<CheckCircleIcon fontSize="small" />}
-                        label="Model"
-                        sx={{ ml: 0.5 }}
+                      size="small"
+                      color="success"
+                      variant="outlined"
+                      icon={<CheckCircleIcon fontSize="small" />}
+                      label="Model"
+                      sx={{ ml: 0.5 }}
                     />
-                    </Tooltip>
+                  </Tooltip>
                 ) : (
-                    <Tooltip title={verdict.tooltip}>
+                  <Tooltip title={verdict.tooltip}>
                     <Chip
-                        size="small"
-                        color="error"
-                        variant="outlined"
-                        icon={<CancelIcon fontSize="small" />}
-                        label="Model"
-                        sx={{ ml: 0.5 }}
+                      size="small"
+                      color="error"
+                      variant="outlined"
+                      icon={<CancelIcon fontSize="small" />}
+                      label="Model"
+                      sx={{ ml: 0.5 }}
                     />
-                    </Tooltip>
+                  </Tooltip>
                 );
-                })()}
+              })()}
             </Stack>
-            ) : (
-             <Chip
+          ) : isLive ? (
+            // LIVE: show live badge + current score; keep compact
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ flexShrink: 0, alignItems: "center" }}
+            >
+              <Chip size="small" color="warning" label="Live" />
+              <Chip
                 size="small"
                 variant="outlined"
-                sx={{ flexShrink: 0, maxWidth: '50vw', alignSelf: 'center' }}
-                label={
-                game?.hasClock || /in progress|halftime|final|end of/i.test(game?.status || "")
+                label={`${game.home.code} ${
+                  game.homeScore ?? "–"
+                } — ${game.away.code} ${game.awayScore ?? "–"}`}
+              />
+              <Chip size="small" variant="outlined" label={liveStatusLabel} />
+            </Stack>
+          ) : (
+            // SCHEDULED: show ET if clock exists, otherwise a date label
+            <Chip
+              size="small"
+              variant="outlined"
+              sx={{ flexShrink: 0, maxWidth: "50vw", alignSelf: "center" }}
+              label={
+                game?.hasClock
                   ? formatGameLabel(game._iso, { mode: "ET", withTZ: true })
-                  : new Intl.DateTimeFormat(undefined,{ weekday:'short', month:'short', day:'numeric'})
-                      .format(new Date(`${game.dateKey}T12:00:00Z`))
+                  : new Intl.DateTimeFormat(undefined, {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                    }).format(new Date(`${game.dateKey}T12:00:00Z`))
               }
             />
           )}
@@ -2045,7 +2066,6 @@ function GameCard({ game, onPick }) {
     </Card>
   );
 }
-
 
 /* ========= Main Mobile Calendar (uses balldontlie per-month) ========= */
 export default function AllGamesCalendar(){
