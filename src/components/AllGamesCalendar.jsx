@@ -1391,15 +1391,14 @@ useEffect(() => {
         if (Bt?.games) Bres = Bt;
       }
 
-      // 3) Only if we're OUTSIDE the season window AND both sides have 0, use last completed season
-      const insideSeason = isWithinSeason(gameAnchorISO);
+      // 3) If BOTH sides are empty up to the anchor, just show a message (no fallback)
       const bothEmpty = !(Ares?.games?.length) && !(Bres?.games?.length);
-      if (!insideSeason && bothEmpty) {
-        const [Af, Bf] = await Promise.all([
-          fetchTeamLast10FromSeasonAtBDL(game.away.code, gameAnchorISO),
-          fetchTeamLast10FromSeasonAtBDL(game.home.code, gameAnchorISO),
-        ]);
-        Ares = Af; Bres = Bf;
+      if (bothEmpty) {
+        if (cancelled) return;
+        const msg = `No games yet this season as of ${gameAnchorISO}.`;
+        setA({ loading: false, error: msg, data: { team: game?.away?.code, games: [] } });
+        setB({ loading: false, error: msg, data: { team: game?.home?.code, games: [] } });
+        return;
       }
 
       if (cancelled) return;
