@@ -77,6 +77,12 @@ function initials(first = "", last = "") {
   const f = (first || "").trim(); const l = (last || "").trim();
   return `${f ? f[0] : ""}${l ? l[0] : ""}`.toUpperCase() || "•";
 }
+
+const logit = (p) => Math.log(Math.max(1e-9, Math.min(1-1e-9, p)) / (1 - Math.max(1e-9, Math.min(1-1e-9, p))));
+const ilogit = (z) => 1 / (1 + Math.exp(-z));
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+
 function displayName(player, fallbackId) {
   if (!player) return `#${fallbackId}`;
   const f = (player.first_name || "").trim();
@@ -564,14 +570,18 @@ async function computePriorEdgeBDL(homeCode, awayCode){
 
 async function buildProbsForGameAsync({ game, awayData, homeData }) {
   const gameDateISO =
-    (game?._iso || "").slice(0, 10) ||
-    (game?.dateKey || "") ||
-    new Date().toISOString().slice(0, 10);
+    (game?._iso || "").slice(0,10) || (game?.dateKey || "") || new Date().toISOString().slice(0,10);
 
   const homeGames = homeData?.games || [];
   const awayGames = awayData?.games || [];
 
-  // If both sides have recent games, use your existing model
+  // Always compute a PRIOR
+  const homeCode = game?.home?.code, awayCode = game?.away?.code;
+  const prior = (homeCode && awayCode) ? await computePriorEdgeBDL(homeCode, awayCode) : null;
+  const pPrior = prior?.pHome ?? 0.5;
+
+  // If we have recent games for BOTH teams, build a recent-form probability
+  let pRecent = null, recentInfo = null;
   if (homeGames.length && awayGames.length) {
     const homeSummary = summarizeLastNGames(homeGames, 10);
     const awaySummary = summarizeLastNGames(awayGames, 10);
@@ -581,54 +591,74 @@ async function buildProbsForGameAsync({ game, awayData, homeData }) {
     const awayB2B = isBackToBack(gameDateISO, awayGames);
 
     const P = computeGameProbabilities({
-      homeSummary,
-      awaySummary,
-      homeRestDays,
-      awayRestDays,
-      homeB2B,
-      awayB2B,
+      homeSummary, awaySummary,
+      homeRestDays, awayRestDays,
+      homeB2B, awayB2B,
       neutralSite: false,
     });
-
-    return {
-      ...P,
-      mode: "recent",
-      factors: explainFactors({ homeSummary, awaySummary, deltas: P.deltas }),
-      provenance: `Recent-form model using balldontlie results from the last 21 days (anchored to ${gameDateISO}). Features include each team’s last-10 summary, days of rest, and back-to-back flags.`,
-    };
+    pRecent = P.pHome;
+    recentInfo = { P, homeGamesN: homeGames.length, awayGamesN: awayGames.length };
   }
 
-  // Fallback: prior-based edge
-  const homeCode = game?.home?.code;
-  const awayCode = game?.away?.code;
-  if (!homeCode || !awayCode) return null;
-
-  try {
-    const prior = await computePriorEdgeBDL(homeCode, awayCode);
-    const pct = Math.round(prior.pHome * 100);
+  // BLENDING LOGIC
+  if (pRecent == null) {
+    // No recent window yet → prior only
     return {
-      pHome: prior.pHome,
-      deltas: prior.deltas,
+      pHome: pPrior,
       mode: "prior",
+      deltas: prior?.deltas || {},
       factors: [
-        { label: "Last season diff (H−A)", value: `${prior.deltas.priorDiff} pts/g` },
-        { label: "Home-court", value: `${prior.deltas.hca} pts` },
-        { label: "Preseason nudge", value: `${prior.deltas.preseason} pts` },
-        { label: "Season used", value: `${prior.sources.seasonEndYear}` },
+        { label: "Last season diff (H−A)", value: `${prior?.deltas?.priorDiff?.toFixed?.(2) ?? 0} pts/g` },
+        { label: "Home-court", value: `${prior?.deltas?.hca ?? 2.3} pts` },
+        { label: "Preseason nudge", value: `${prior?.deltas?.preseason?.toFixed?.(2) ?? 0} pts` },
       ],
-    };
-  } catch (e) {
-    // If even priors fail (no key/tier), signal why
-    return {
-      pHome: 0.5,
-      mode: "none",
-      factors: [
-        { label: "Unavailable", value: e?.message || "No recent or prior data available" }
-      ],
-      provenance: `Data unavailable from balldontlie for recent form and priors; showing neutral 50/50.`,
+      provenance: `Prior-only (no current-season window yet). Based on last season point differential + home-court + tiny preseason weight.`,
+      confidence: 0.25, // low
+      gamesUsed: { recentHome: 0, recentAway: 0 }
     };
   }
+
+  // Compute how much **current-season** data we have and grow alpha with it
+  const nH = homeGames.filter(g => /W|L|T/.test(g.result)).length || homeGames.length;
+  const nA = awayGames.filter(g => /W|L|T/.test(g.result)).length || awayGames.length;
+  const nEff = Math.min(nH, nA);
+
+  // Example schedule:
+  // 0 games → 0.00, 1 → 0.25, 2 → 0.40, 3 → 0.55, 4 → 0.70, ≥5 → 0.80
+  const alpha = clamp01(
+    nEff >= 5 ? 0.80 :
+    nEff === 4 ? 0.70 :
+    nEff === 3 ? 0.55 :
+    nEff === 2 ? 0.40 :
+    nEff === 1 ? 0.25 : 0.00
+  );
+
+  // Blend on the logit scale for better calibration
+  const z = (1 - alpha) * logit(pPrior) + alpha * logit(pRecent);
+  const pBlend = ilogit(z);
+
+  return {
+    pHome: pBlend,
+    mode: alpha >= 0.8 ? "recent" : "blend",
+    deltas: recentInfo?.P?.deltas || prior?.deltas || {},
+    factors: recentInfo
+      ? explainFactors({ homeSummary: summarizeLastNGames(homeGames, 10),
+                         awaySummary: summarizeLastNGames(awayGames, 10),
+                         deltas: recentInfo.P.deltas })
+      : [
+          { label: "Last season diff (H−A)", value: `${prior?.deltas?.priorDiff?.toFixed?.(2) ?? 0} pts/g` },
+          { label: "Home-court", value: `${prior?.deltas?.hca ?? 2.3} pts` },
+          { label: "Preseason nudge", value: `${prior?.deltas?.preseason?.toFixed?.(2) ?? 0} pts` },
+        ],
+    provenance:
+      alpha === 0
+        ? `Prior-only (no current-season data).`
+        : `Blended: ${Math.round(alpha*100)}% recent form (last 21 days) + ${Math.round((1-alpha)*100)}% prior (last season + HCA + tiny preseason).`,
+    confidence: Math.max(0.25, alpha),              // expose as 0.25–0.8 in early going
+    gamesUsed: { recentHome: nH, recentAway: nA },  // handy for the UI
+  };
 }
+
 
 async function fetchTeamFormBDL(teamAbbr, {
    days = 21, includePostseason = false, anchorISO = null
@@ -1109,6 +1139,15 @@ function ProbabilityCard({ probs, homeCode, awayCode, verdict, live }) {
             )
           )}
         </Stack>
+
+        {typeof probs?.confidence === 'number' && (
+          <Chip
+            size="small"
+            variant="outlined"
+            sx={{ ml: 1 }}
+            label={`Confidence ${Math.round(probs.confidence*100)}%${probs?.gamesUsed ? ` · H${probs.gamesUsed.recentHome}/A${probs.gamesUsed.recentAway}` : ''}`}
+          />
+        )}
 
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
           <Typography variant="h5" sx={{ fontWeight:800 }}>
