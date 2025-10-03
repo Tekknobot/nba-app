@@ -30,8 +30,11 @@ async function bdl(url){
   throw new Error(`BDL non-JSON response (${ct || "unknown"}). First bytes: ${text.slice(0,120)}`);
 }
 
+const BDL_BASE =
+  process.env.NODE_ENV === "development" ? "/bdl" : "/api/bdl";
+
 async function fetchGameByIdBDL(id){
-  const j = await bdl(`/bdl/games/${id}`);
+  const j = await bdl(`${BDL_BASE}/games/${id}`);
   const g = j || {};
   return {
     id: g.id,
