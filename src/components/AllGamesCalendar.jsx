@@ -1590,8 +1590,14 @@ useEffect(() => {
 
   // ⬇️ put this inside ComparisonDrawer, anywhere before the `return ( ... )`
   function NarrativeBlock({ game, probs, a, b, h2h }) {
-    const isFinal = (game?.status || "").toLowerCase().includes("final");
-    const home = game?.home?.code, away = game?.away?.code;
+    if (!game) return null;
+
+    const status = String(game?.status || "");
+    const isFinal = /final/i.test(status);
+    const isLive  = /in progress|end of|halftime|quarter|q\d/i.test(status);
+
+    const home = game?.home?.code || "HOME";
+    const away = game?.away?.code || "AWAY";
 
     const last10Home = b?.data?.games || [];
     const last10Away = a?.data?.games || [];
@@ -1601,53 +1607,92 @@ useEffect(() => {
       return `${w}-${l}${t?`-${t}`:''}`;
     };
 
-    const h2hLine = h2h?.data ? `This season, ${home} lead the series ${h2h.data.aWins}-${h2h.data.bWins}.` : "";
+    // --- SAFE date formatting (no throws)
+    const safeWhen = (() => {
+      // Prefer _iso if present & valid
+      const dtISO = game?._iso ? new Date(game._iso) : null;
+      const dtKey = game?.dateKey ? new Date(`${game.dateKey}T12:00:00Z`) : null;
+      const dt    = (dtISO && !Number.isNaN(+dtISO)) ? dtISO :
+                    (dtKey && !Number.isNaN(+dtKey)) ? dtKey : null;
+
+      if (!dt) return "TBD";
+      try {
+        return game?.hasClock
+          ? new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"short" }).format(dt)
+          : new Intl.DateTimeFormat(undefined, { dateStyle:"medium" }).format(dt);
+      } catch {
+        return "TBD";
+      }
+    })();
+
+    const h2hLine = h2h?.data
+      ? `This season, ${home} lead the series ${h2h.data.aWins}-${h2h.data.bWins}.`
+      : "";
 
     const modelLine = (() => {
-      if (!probs?.pHome) return "";
-      const pct = Math.round(probs.pHome * 100);
-      const mode = probs.mode === "recent" ? "recent form" : probs.mode === "prior" ? "a prior model" : "available data";
+      const p = Number(probs?.pHome);
+      if (!Number.isFinite(p)) return "";
+      const pct  = Math.round(p * 100);
+      const mode = probs?.mode === "recent" ? "recent form"
+                : probs?.mode === "prior"  ? "a prior model"
+                : "available data";
       return `Our model, based on ${mode}, gives ${home} a ${pct}% chance at home.`;
     })();
 
     const finalLine = (() => {
       if (!isFinal) return "";
-      const hs = Number(game?.homeScore ?? 0), as = Number(game?.awayScore ?? 0);
+      const hs = Number(game?.homeScore ?? NaN);
+      const as = Number(game?.awayScore ?? NaN);
+      if (!Number.isFinite(hs) || !Number.isFinite(as)) return `${home} vs ${away} — Final.`;
       const winner = hs > as ? home : away;
       return `${winner} won ${Math.max(hs,as)}–${Math.min(hs,as)}.`;
     })();
 
-    const previewLine = (() => {
-      if (isFinal) return "";
-      const hForm = wlt(last10Home), aForm = wlt(last10Away);
-      const when = game?.hasClock
-        ? new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"short" })
-            .format(new Date(game._iso))
-        : new Intl.DateTimeFormat(undefined, { dateStyle:"medium" })
-            .format(new Date(`${game?.dateKey}T12:00:00Z`));
-      return `${away} visit ${home} on ${when}. Recent form: ${home} ${hForm}, ${away} ${aForm}.`;
-    })();
+    const liveLine = isLive
+      ? `${home} ${game?.homeScore ?? "–"} – ${away} ${game?.awayScore ?? "–"} (${status})`
+      : "";
+
+    const previewLine = (!isFinal && !isLive)
+      ? `${away} visit ${home} on ${safeWhen}. Recent form: ${home} ${wlt(last10Home)}, ${away} ${wlt(last10Away)}.`
+      : "";
 
     const whyLine = (() => {
-      if (!probs?.factors?.length) return "";
-      const top = probs.factors.slice(0,3).map(f => f.label.toLowerCase()).join(", ");
-      return `Key factors: ${top}.`;
+      const f = probs?.factors;
+      if (!Array.isArray(f) || f.length === 0) return "";
+      const top = f.slice(0,3).map(x => String(x?.label || "").toLowerCase()).filter(Boolean).join(", ");
+      return top ? `Key factors: ${top}.` : "";
     })();
+
+    // If everything ends up empty, still render a small placeholder line.
+    const bodyTop = isFinal ? finalLine : (isLive ? liveLine : previewLine);
+    const hasAny = bodyTop || modelLine || h2hLine || whyLine;
 
     return (
       <Card variant="outlined" sx={{ borderRadius:1, mt:1.5 }}>
         <CardContent sx={{ p:2 }}>
           <Typography component="h2" variant="subtitle1" sx={{ fontWeight:700, mb:0.5 }}>
-            {isFinal ? "Game recap" : "Game preview"}
+            {isFinal ? "Game recap" : isLive ? "Live update" : "Game preview"}
           </Typography>
-          {isFinal ? (
-            <Typography variant="body2" sx={{ mb:0.75 }}>{finalLine}</Typography>
-          ) : (
-            <Typography variant="body2" sx={{ mb:0.75 }}>{previewLine}</Typography>
+
+          <Typography variant="body2" sx={{ mb:0.75 }}>
+            {bodyTop || `${away} at ${home}.`}
+          </Typography>
+
+          {modelLine && (
+            <Typography variant="body2" sx={{ mb:0.5 }}>{modelLine}</Typography>
           )}
-          {modelLine && <Typography variant="body2" sx={{ mb:0.5 }}>{modelLine}</Typography>}
-          {h2hLine && <Typography variant="body2" sx={{ mb:0.5 }}>{h2hLine}</Typography>}
-          {whyLine && <Typography variant="body2">{whyLine}</Typography>}
+          {h2hLine && (
+            <Typography variant="body2" sx={{ mb:0.5 }}>{h2hLine}</Typography>
+          )}
+          {whyLine && (
+            <Typography variant="body2">{whyLine}</Typography>
+          )}
+
+          {!hasAny && (
+            <Typography variant="body2" sx={{ opacity:0.7 }}>
+              Preview will appear once data loads.
+            </Typography>
+          )}
         </CardContent>
       </Card>
     );
