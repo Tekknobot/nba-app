@@ -2234,11 +2234,18 @@ function GameCard({ game, onPick }) {
           )}
         </Stack>
 
-        <Typography variant="caption" sx={{ display:'block', mt:0.25 }}>
-          <a href={`/game/${game.id}`} style={{ textDecoration:'underline' }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="center"
+        sx={{ mt: 0.5 }}
+      >
+        <Typography variant="caption">
+          <a href={`/game/${game.id}`} style={{ textDecoration: 'underline' }}>
             Open full game page
           </a>
         </Typography>
+      </Stack>
 
       </ListItemButton>
     </Card>
