@@ -34,7 +34,12 @@ const BDL_BASE = process.env.NODE_ENV === "development" ? "/bdl" : "/api/bdl";
 
 async function fetchGameByIdBDL(id){
   const j = await bdl(`${BDL_BASE}/games/${id}`);
-  const g = j || {};
+  // Some hosts wrap single-object responses as { data: {...} } — be tolerant:
+  const g = (j && (j.data || j)) || {};
+  // 💡 If the shape doesn't have teams, treat as "game not found"
+  if (!g.home_team || !g.visitor_team) {
+    throw new Error(`Game not found or unexpected response for id "${id}". Keys: ${Object.keys(j||{}).join(", ") || "none"}`);
+  }
   return {
     id: g.id,
     status: g.status || "",
@@ -82,9 +87,15 @@ function GameNarrative({ game, modelPct=50, modeLabel="recent form" }) {
   return (
     <Card variant="outlined" sx={{ borderRadius:1 }}>
       <CardContent sx={{ p:2 }}>
-        <Typography component="h2" variant="subtitle1" sx={{ fontWeight:700, mb:0.5 }}>
-          {heading}
-        </Typography>
+         <Typography color="warning.main" sx={{ mt:1, whiteSpace:'pre-wrap' }}>
+           {String(err)}
+         </Typography>
+         <Typography variant="caption" sx={{ display:'block', mt:1.5 }}>
+           Tip: open this in a new tab to verify JSON is returned →
+           <a href={`${BDL_BASE}/games/${encodeURIComponent(id)}`} target="_blank" rel="noreferrer">
+             {`${BDL_BASE}/games/${id}`}
+           </a>
+         </Typography>
         <Typography variant="body2" sx={{ mb:1 }}>{topLine}</Typography>
         {modelLine && <Typography variant="body2">{modelLine}</Typography>}
       </CardContent>
