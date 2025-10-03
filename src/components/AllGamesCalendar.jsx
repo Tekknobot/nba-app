@@ -2057,7 +2057,7 @@ function DayPill({ d, selected, count, onClick }) {
 
 /* Game card in the agenda list */
 function GameCard({ game, onPick }) {
-  const vsLabel = `${game.away.code} @ ${game.home.code}`;
+  const vsLabel = `${game.away.code} @ ${game.home.code}`; //
   const sub = `${game.away.name} at ${game.home.name}`;
   const final = resultMeta(game);
   const isLive = /in progress|halftime|end of|quarter|q\d/i.test(
