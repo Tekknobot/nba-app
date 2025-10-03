@@ -1589,113 +1589,162 @@ useEffect(() => {
   const miniModeLabel = miniMode === "recent" ? "last 21 days" : "season averages (fallback)";
 
   // ⬇️ put this inside ComparisonDrawer, anywhere before the `return ( ... )`
-  function NarrativeBlock({ game, probs, a, b, h2h }) {
-    if (!game) return null;
+  function NarrativeBlockWritten({ game, probs, a, b, h2h, mini, miniModeLabel = "last 21 days" }) {
+  if (!game) return null;
 
-    const status = String(game?.status || "");
-    const isFinal = /final/i.test(status);
-    const isLive  = /in progress|end of|halftime|quarter|q\d/i.test(status);
+  // ---------- tiny helpers (safe + deterministic flavor) ----------
+  const status = String(game?.status || "");
+  const isFinal = /final/i.test(status);
+  const isLive  = /in progress|end of|halftime|quarter|q\d/i.test(status);
 
-    const home = game?.home?.code || "HOME";
-    const away = game?.away?.code || "AWAY";
+  const home = game?.home?.code || "HOME";
+  const away = game?.away?.code || "AWAY";
 
-    const last10Home = b?.data?.games || [];
-    const last10Away = a?.data?.games || [];
+  const last10Home = b?.data?.games || [];
+  const last10Away = a?.data?.games || [];
 
-    const wlt = (arr) => {
-      let w=0,l=0,t=0; arr.forEach(g => (g.result==='W'?w++:g.result==='L'?l++:t++));
-      return `${w}-${l}${t?`-${t}`:''}`;
+  const WLT = (arr) => {
+    let w=0,l=0,t=0; arr.forEach(g => (g.result==='W'?w++:g.result==='L'?l++:t++));
+    return { w, l, t, label: `${w}-${l}${t?`-${t}`:''}` };
+  };
+
+  const safeWhen = (() => {
+    const dtISO = game?._iso ? new Date(game._iso) : null;
+    const dtKey = game?.dateKey ? new Date(`${game.dateKey}T12:00:00Z`) : null;
+    const dt    = (dtISO && !Number.isNaN(+dtISO)) ? dtISO :
+                  (dtKey && !Number.isNaN(+dtKey)) ? dtKey : null;
+    if (!dt) return "TBD";
+    try {
+      return game?.hasClock
+        ? new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"short" }).format(dt)
+        : new Intl.DateTimeFormat(undefined, { dateStyle:"medium" }).format(dt);
+    } catch { return "TBD"; }
+  })();
+
+  // deterministic pick helper (so the prose feels varied but stable)
+  function hashStr(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))|0; return Math.abs(h); }
+  function pick(seed, arr){ return arr[ seed % arr.length ]; }
+  const seed = hashStr(`${game?.dateKey}|${home}|${away}|${status}`);
+
+  // phrase banks
+  const previewLeads = [
+    `${away} visit ${home}`,
+    `${home} host ${away}`,
+    `${away} head to ${home}`,
+    `${home} welcome ${away}`
+  ];
+  const liveLeads = [
+    `Live from the court`,
+    `Underway`,
+    `In progress`,
+    `The action continues`
+  ];
+  const recapLeads = [
+    `Final in the books`,
+    `All wrapped up`,
+    `That’s a final`,
+    `Result finalized`
+  ];
+
+  const hForm = WLT(last10Home).label || "0-0";
+  const aForm = WLT(last10Away).label || "0-0";
+
+  // factors -> readable snippets
+  const factorSnips = (Array.isArray(probs?.factors) ? probs.factors : [])
+    .slice(0, 3)
+    .map(f => String(f?.label || "").toLowerCase())
+    .map(lbl => {
+      if (/rest/.test(lbl)) return "rest advantage";
+      if (/pace|tempo/.test(lbl)) return "pace and shot volume";
+      if (/defen/.test(lbl)) return "defensive efficiency";
+      if (/offen/.test(lbl)) return "half-court offense";
+      if (/b2b|back[-\s]?to[-\s]?back/.test(lbl)) return "back-to-back fatigue";
+      if (/turnover/.test(lbl)) return "turnover margin";
+      if (/rebound/.test(lbl)) return "rebounding edge";
+      return lbl;
+    });
+
+  const modelPct = Number.isFinite(Number(probs?.pHome)) ? Math.round(Number(probs.pHome) * 100) : null;
+  const modelMode = probs?.mode === "recent" ? "recent form"
+                  : probs?.mode === "prior"  ? "a prior season model"
+                  : "available data";
+
+  // top players mini blurbs (if we have them)
+  const miniAway = mini?.data?.away?.[0];
+  const miniHome = mini?.data?.home?.[0];
+  const fmtNum = (v) => (v ?? 0).toFixed(1);
+  const nameOf = (p) => {
+    const f = p?.player?.first_name || "";
+    const l = p?.player?.last_name || "";
+    return (f && l) ? `${f} ${l}` : (l || f || `#${p?.player_id||"?"}`);
     };
 
-    // --- SAFE date formatting (no throws)
-    const safeWhen = (() => {
-      // Prefer _iso if present & valid
-      const dtISO = game?._iso ? new Date(game._iso) : null;
-      const dtKey = game?.dateKey ? new Date(`${game.dateKey}T12:00:00Z`) : null;
-      const dt    = (dtISO && !Number.isNaN(+dtISO)) ? dtISO :
-                    (dtKey && !Number.isNaN(+dtKey)) ? dtKey : null;
+  const homeStar = miniHome ? `${nameOf(miniHome)} (${fmtNum(miniHome.pts)} pts, ${fmtNum(miniHome.reb)} reb, ${fmtNum(miniHome.ast)} ast ${miniModeLabel})` : null;
+  const awayStar = miniAway ? `${nameOf(miniAway)} (${fmtNum(miniAway.pts)} pts, ${fmtNum(miniAway.reb)} reb, ${fmtNum(miniAway.ast)} ast ${miniModeLabel})` : null;
 
-      if (!dt) return "TBD";
-      try {
-        return game?.hasClock
-          ? new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"short" }).format(dt)
-          : new Intl.DateTimeFormat(undefined, { dateStyle:"medium" }).format(dt);
-      } catch {
-        return "TBD";
-      }
-    })();
+  // H2H line
+  const h2hLine = h2h?.data ? `This season, ${home} lead the series ${h2h.data.aWins}–${h2h.data.bWins}.` : "";
 
-    const h2hLine = h2h?.data
-      ? `This season, ${home} lead the series ${h2h.data.aWins}-${h2h.data.bWins}.`
-      : "";
+  // primary top line
+  let lead, bodyTop;
+  if (isFinal) {
+    const hs = Number(game?.homeScore ?? NaN);
+    const as = Number(game?.awayScore ?? NaN);
+    const scoreKnown = Number.isFinite(hs) && Number.isFinite(as);
+    const winner = scoreKnown ? (hs > as ? home : away) : null;
+    lead = pick(seed, recapLeads);
+    bodyTop = scoreKnown
+      ? `${lead}: ${winner} win ${Math.max(hs,as)}–${Math.min(hs,as)}.`
+      : `${lead}: ${away} at ${home}.`;
+  } else if (isLive) {
+    lead = pick(seed, liveLeads);
+    bodyTop = `${lead}: ${home} ${game?.homeScore ?? "–"} — ${away} ${game?.awayScore ?? "–"} (${status}).`;
+  } else {
+    lead = pick(seed, previewLeads);
+    bodyTop = `${lead} on ${safeWhen}. Recent form: ${home} ${hForm}, ${away} ${aForm}.`;
+  }
 
-    const modelLine = (() => {
-      const p = Number(probs?.pHome);
-      if (!Number.isFinite(p)) return "";
-      const pct  = Math.round(p * 100);
-      const mode = probs?.mode === "recent" ? "recent form"
-                : probs?.mode === "prior"  ? "a prior model"
-                : "available data";
-      return `Our model, based on ${mode}, gives ${home} a ${pct}% chance at home.`;
-    })();
+  // model sentence
+  const modelLine = (modelPct == null)
+    ? ""
+    : `Our model, built on ${modelMode}, gives ${home} a ${modelPct}% chance at home.`;
 
-    const finalLine = (() => {
-      if (!isFinal) return "";
-      const hs = Number(game?.homeScore ?? NaN);
-      const as = Number(game?.awayScore ?? NaN);
-      if (!Number.isFinite(hs) || !Number.isFinite(as)) return `${home} vs ${away} — Final.`;
-      const winner = hs > as ? home : away;
-      return `${winner} won ${Math.max(hs,as)}–${Math.min(hs,as)}.`;
-    })();
+  // “three things” style bullets (only if we have anything to say)
+  const bullets = [];
+  if (factorSnips.length) bullets.push(`Watch for ${factorSnips.join(", ")}.`);
+  if (homeStar || awayStar) {
+    const who = [homeStar, awayStar].filter(Boolean).join(" vs ");
+    bullets.push(`Impact players: ${who}.`);
+  }
+  if (h2hLine) bullets.push(h2hLine);
 
-    const liveLine = isLive
-      ? `${home} ${game?.homeScore ?? "–"} – ${away} ${game?.awayScore ?? "–"} (${status})`
-      : "";
+  return (
+    <Card variant="outlined" sx={{ borderRadius:1 }}>
+      <CardContent sx={{ p:2 }}>
+        <Typography component="h2" variant="subtitle1" sx={{ fontWeight:700, mb:0.5 }}>
+          {isFinal ? "Game recap" : isLive ? "Live update" : "Game preview"}
+        </Typography>
 
-    const previewLine = (!isFinal && !isLive)
-      ? `${away} visit ${home} on ${safeWhen}. Recent form: ${home} ${wlt(last10Home)}, ${away} ${wlt(last10Away)}.`
-      : "";
+        <Typography variant="body2" sx={{ mb:1 }}>
+          {bodyTop}
+        </Typography>
 
-    const whyLine = (() => {
-      const f = probs?.factors;
-      if (!Array.isArray(f) || f.length === 0) return "";
-      const top = f.slice(0,3).map(x => String(x?.label || "").toLowerCase()).filter(Boolean).join(", ");
-      return top ? `Key factors: ${top}.` : "";
-    })();
+        {modelLine && (
+          <Typography variant="body2" sx={{ mb: 1 }}>{modelLine}</Typography>
+        )}
 
-    // If everything ends up empty, still render a small placeholder line.
-    const bodyTop = isFinal ? finalLine : (isLive ? liveLine : previewLine);
-    const hasAny = bodyTop || modelLine || h2hLine || whyLine;
-
-    return (
-      <Card variant="outlined" sx={{ borderRadius:1, mt:1.5 }}>
-        <CardContent sx={{ p:2 }}>
-          <Typography component="h2" variant="subtitle1" sx={{ fontWeight:700, mb:0.5 }}>
-            {isFinal ? "Game recap" : isLive ? "Live update" : "Game preview"}
-          </Typography>
-
-          <Typography variant="body2" sx={{ mb:0.75 }}>
-            {bodyTop || `${away} at ${home}.`}
-          </Typography>
-
-          {modelLine && (
-            <Typography variant="body2" sx={{ mb:0.5 }}>{modelLine}</Typography>
-          )}
-          {h2hLine && (
-            <Typography variant="body2" sx={{ mb:0.5 }}>{h2hLine}</Typography>
-          )}
-          {whyLine && (
-            <Typography variant="body2">{whyLine}</Typography>
-          )}
-
-          {!hasAny && (
-            <Typography variant="body2" sx={{ opacity:0.7 }}>
-              Preview will appear once data loads.
-            </Typography>
-          )}
-        </CardContent>
-      </Card>
-    );
+        {!!bullets.length && (
+          <List dense sx={{ mt:0, pt:0 }}>
+            {bullets.map((b, i) => (
+              <ListItem key={i} disableGutters sx={{ py:0.25 }}>
+                <ListItemText primaryTypographyProps={{ variant:'body2' }} primary={b} />
+              </ListItem>
+            ))}
+          </List>
+        )}
+      </CardContent>
+    </Card>
+  );
   }
 
   return (
@@ -1740,7 +1789,17 @@ useEffect(() => {
       </Stack>
 
       {/* after the Last10 lists and before ProbabilityCard */}
-      <NarrativeBlock game={game} probs={probs} a={a} b={b} h2h={h2h} />
+      <NarrativeBlockWritten
+        game={game}
+        probs={probs}
+        a={a}
+        b={b}
+        h2h={h2h}
+        mini={mini}
+        miniModeLabel={miniModeLabel}
+      />
+
+      <Divider sx={{ my: 1 }} />
 
       {/* scrollable middle */}
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', pr: 0.5 }}>
