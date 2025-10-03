@@ -61,10 +61,122 @@ async function fetchGameById(id) {
   };
 }
 
+// Derive NBA season window from an ISO (NBA seasons run Oct–Jun, named by END year)
+function seasonWindowFromISO(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  const endYear = d.getMonth() >= 9 ? d.getFullYear() + 1 : d.getFullYear(); // Oct (9) → next year
+  return { start: `${endYear - 1}-10-01`, end: `${endYear}-06-30`, endYear };
+}
+
+async function fetchJsonViaGateway(pathAndQs) {
+  const url = `${BDL_BASE}/${pathAndQs}`;
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error(`BDL ${r.status}`);
+  const j = await r.json();
+  return j?.data ?? j;
+}
+
+// Head-to-head this season (wins for HOME vs AWAY)
+async function fetchHeadToHead(homeCode, awayCode, dateISO) {
+  const { start, end } = seasonWindowFromISO(dateISO);
+  // Pull all HOME games this season and filter opponent == AWAY
+  const qs = new URLSearchParams({
+    "team_ids[]": homeCodeToId(homeCode),
+    start_date: start,
+    end_date: end,
+    per_page: "100",
+  }).toString();
+  const data = await fetchJsonViaGateway(`games?${qs}`);
+
+  let homeWins = 0, awayWins = 0;
+  for (const g of data || []) {
+    const hs = g?.home_team_score, as = g?.visitor_team_score;
+    if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
+    const h = (g?.home_team?.abbreviation || "").toUpperCase();
+    const v = (g?.visitor_team?.abbreviation || "").toUpperCase();
+    const involves = (h === homeCode && v === awayCode) || (h === awayCode && v === homeCode);
+    if (!involves) continue;
+    const homeTeamIsH = h === homeCode;
+    const homeScore   = homeTeamIsH ? hs : as;
+    const awayScore   = homeTeamIsH ? as : hs;
+    if (homeScore > awayScore) homeWins++; else if (awayScore > homeScore) awayWins++;
+  }
+  return { homeWins, awayWins };
+}
+
+// Minimal map (extend if you want all teams)
+const BDL_TEAM_ID = { ATL:1,BOS:2,BKN:3,CHA:4,CHI:5,CLE:6,DAL:7,DEN:8,DET:9,GSW:10,HOU:11,IND:12,LAC:13,LAL:14,MEM:15,MIA:16,MIL:17,MIN:18,NOP:19,NYK:20,OKC:21,ORL:22,PHI:23,PHX:24,POR:25,SAC:26,SAS:27,TOR:28,UTA:29,WAS:30 };
+function homeCodeToId(code){ const id = BDL_TEAM_ID[(code||"").toUpperCase()]; if (!id) throw new Error(`Unknown team code: ${code}`); return String(id); }
+
+// Roster → player ids (for season_averages), then compute leaders
+async function fetchTeamLeaders(teamCode, dateISO) {
+  const { endYear } = seasonWindowFromISO(dateISO);
+  // 1) roster (players endpoint)
+  const rosterQs = new URLSearchParams({ "team_ids[]": homeCodeToId(teamCode), per_page: "100" }).toString();
+  const roster = await fetchJsonViaGateway(`players?${rosterQs}`);
+  const ids = Array.from(new Set((roster || []).map(p => p?.id).filter(Number))).slice(0, 30);
+  if (!ids.length) return null;
+
+  // 2) season averages
+  const saQs = new URLSearchParams({ season: String(endYear) });
+  ids.forEach(id => saQs.append("player_ids[]", String(id)));
+  const avgs = await fetchJsonViaGateway(`season_averages?${saQs.toString()}`);
+  if (!Array.isArray(avgs) || !avgs.length) return null;
+
+  // Join names from roster
+  const byId = new Map((roster || []).map(p => [p.id, p]));
+  const rows = avgs.map(a => ({
+    id: a.player_id,
+    gp: a.games_played ?? a.gp ?? 0,
+    min: a.min ?? 0,
+    pts: a.pts ?? 0,
+    reb: a.reb ?? 0,
+    ast: a.ast ?? 0,
+    ply: byId.get(a.player_id) || null
+  }));
+
+  // pick leaders (min GP gate to avoid tiny samples)
+  const minGp = 5;
+  const top = (key) => rows.filter(r => r.gp >= minGp).sort((x,y)=> (y[key]||0)-(x[key]||0))[0];
+
+  const p = top("pts"), r = top("reb"), a = top("ast");
+  const name = (row) => row?.ply ? `${row.ply.first_name || ""} ${row.ply.last_name || ""}`.trim() : null;
+
+  return {
+    season: endYear,
+    points: p ? { name: name(p), v: p.pts } : null,
+    rebounds: r ? { name: name(r), v: r.reb } : null,
+    assists: a ? { name: name(a), v: a.ast } : null,
+  };
+}
+
 export default function GamePage() {
   const { id } = useParams();
   const [game, setGame] = useState(null);
   const [err, setErr] = useState(null);
+
+    const [h2h, setH2h] = useState(null);
+    const [leadersHome, setLeadersHome] = useState(null);
+    const [leadersAway, setLeadersAway] = useState(null);
+
+    useEffect(() => {
+    if (!game) return;
+    let ok = true;
+    (async () => {
+        try {
+        const [hh, lh, la] = await Promise.all([
+            fetchHeadToHead(game.home.code, game.away.code, game.dateISO).catch(()=>null),
+            fetchTeamLeaders(game.home.code, game.dateISO).catch(()=>null),
+            fetchTeamLeaders(game.away.code, game.dateISO).catch(()=>null),
+        ]);
+        if (!ok) return;
+        setH2h(hh);
+        setLeadersHome(lh);
+        setLeadersAway(la);
+        } catch { /* silent */ }
+    })();
+    return () => { ok = false; };
+    }, [game]);
 
   useEffect(() => {
     let ok = true;
@@ -158,6 +270,79 @@ export default function GamePage() {
           </Typography>
         </CardContent>
       </Card>
+
+        {/* Preview notes */}
+        <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
+        <CardContent sx={{ p: 2 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
+            Preview notes
+            </Typography>
+
+            {/* Head-to-head */}
+            {h2h ? (
+            <Typography variant="body2" sx={{ mb: 1 }}>
+                Season series so far: {game.home.code} {h2h.homeWins}–{h2h.awayWins} {game.away.code}.
+            </Typography>
+            ) : (
+            <Typography variant="body2" sx={{ mb: 1, opacity: 0.7 }}>
+                Season series info will appear here once games are played.
+            </Typography>
+            )}
+
+            {/* Impact players */}
+            <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+            Impact players (season averages)
+            </Typography>
+            <List dense sx={{ mt: 0 }}>
+            {/* Home leaders */}
+            {leadersHome ? (
+                <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText
+                    primaryTypographyProps={{ variant: "body2" }}
+                    primary={
+                    <>
+                        <strong>{game.home.name}</strong>{": "}
+                        {leadersHome.points?.name ? `${leadersHome.points.name} ${leadersHome.points.v.toFixed(1)} PPG` : "—"}
+                        {" · "}
+                        {leadersHome.rebounds?.name ? `${leadersHome.rebounds.name} ${leadersHome.rebounds.v.toFixed(1)} RPG` : "—"}
+                        {" · "}
+                        {leadersHome.assists?.name ? `${leadersHome.assists.name} ${leadersHome.assists.v.toFixed(1)} APG` : "—"}
+                    </>
+                    }
+                />
+                </ListItem>
+            ) : (
+                <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Home leaders loading…" />
+                </ListItem>
+            )}
+
+            {/* Away leaders */}
+            {leadersAway ? (
+                <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText
+                    primaryTypographyProps={{ variant: "body2" }}
+                    primary={
+                    <>
+                        <strong>{game.away.name}</strong>{": "}
+                        {leadersAway.points?.name ? `${leadersAway.points.name} ${leadersAway.points.v.toFixed(1)} PPG` : "—"}
+                        {" · "}
+                        {leadersAway.rebounds?.name ? `${leadersAway.rebounds.name} ${leadersAway.rebounds.v.toFixed(1)} RPG` : "—"}
+                        {" · "}
+                        {leadersAway.assists?.name ? `${leadersAway.assists.name} ${leadersAway.assists.v.toFixed(1)} APG` : "—"}
+                    </>
+                    }
+                />
+                </ListItem>
+            ) : (
+                <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Away leaders loading…" />
+                </ListItem>
+            )}
+            </List>
+        </CardContent>
+        </Card>
+
 
       {/* Quick facts */}
       <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
