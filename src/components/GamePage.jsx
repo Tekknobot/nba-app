@@ -155,28 +155,33 @@ export default function GamePage() {
   const [game, setGame] = useState(null);
   const [err, setErr] = useState(null);
 
-    const [h2h, setH2h] = useState(null);
-    const [leadersHome, setLeadersHome] = useState(null);
-    const [leadersAway, setLeadersAway] = useState(null);
+const [h2h, setH2h] = useState(null);
+const [leadersHome, setLeadersHome] = useState(null);
+const [leadersAway, setLeadersAway] = useState(null);
+const [notesTried, setNotesTried] = useState({ h2h: false, leaders: false });
 
-    useEffect(() => {
-    if (!game) return;
-    let ok = true;
-    (async () => {
-        try {
-        const [hh, lh, la] = await Promise.all([
-            fetchHeadToHead(game.home.code, game.away.code, game.dateISO).catch(()=>null),
-            fetchTeamLeaders(game.home.code, game.dateISO).catch(()=>null),
-            fetchTeamLeaders(game.away.code, game.dateISO).catch(()=>null),
-        ]);
-        if (!ok) return;
-        setH2h(hh);
-        setLeadersHome(lh);
-        setLeadersAway(la);
-        } catch { /* silent */ }
-    })();
-    return () => { ok = false; };
-    }, [game]);
+useEffect(() => {
+  if (!game) return;
+  let ok = true;
+  (async () => {
+    try {
+      const [hh, lh, la] = await Promise.all([
+        fetchHeadToHead(game.home.code, game.away.code, game.dateISO).catch(() => null),
+        fetchTeamLeaders(game.home.code, game.dateISO).catch(() => null),
+        fetchTeamLeaders(game.away.code, game.dateISO).catch(() => null),
+      ]);
+      if (!ok) return;
+      setH2h(hh);
+      setLeadersHome(lh);
+      setLeadersAway(la);
+    } finally {
+      if (!ok) return;
+      setNotesTried({ h2h: true, leaders: true });
+    }
+  })();
+  return () => { ok = false; };
+}, [game]);
+
 
   useEffect(() => {
     let ok = true;
@@ -271,78 +276,102 @@ export default function GamePage() {
         </CardContent>
       </Card>
 
-        {/* Preview notes */}
-        <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
-        <CardContent sx={{ p: 2 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
-            Preview notes
-            </Typography>
+    {/* Preview notes */}
+    <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
+    <CardContent sx={{ p: 2 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
+        Preview notes
+        </Typography>
 
-            {/* Head-to-head */}
-            {h2h ? (
+        {/* Head-to-head */}
+        {h2h ? (
+        (h2h.homeWins === 0 && h2h.awayWins === 0)
+            ? (
+            <Typography variant="body2" sx={{ mb: 1 }}>
+                First meeting between {game.away.code} and {game.home.code} this season.
+            </Typography>
+            ) : (
             <Typography variant="body2" sx={{ mb: 1 }}>
                 Season series so far: {game.home.code} {h2h.homeWins}–{h2h.awayWins} {game.away.code}.
             </Typography>
-            ) : (
-            <Typography variant="body2" sx={{ mb: 1, opacity: 0.7 }}>
-                Season series info will appear here once games are played.
-            </Typography>
-            )}
+            )
+        ) : notesTried.h2h ? (
+        <Typography variant="body2" sx={{ mb: 1, opacity: 0.8 }}>
+            Season series data unavailable.
+        </Typography>
+        ) : (
+        <Typography variant="body2" sx={{ mb: 1, opacity: 0.7 }}>
+            Loading season series…
+        </Typography>
+        )}
 
-            {/* Impact players */}
-            <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
-            Impact players (season averages)
-            </Typography>
-            <List dense sx={{ mt: 0 }}>
-            {/* Home leaders */}
-            {leadersHome ? (
-                <ListItem disableGutters sx={{ py: 0.25 }}>
-                <ListItemText
-                    primaryTypographyProps={{ variant: "body2" }}
-                    primary={
-                    <>
-                        <strong>{game.home.name}</strong>{": "}
-                        {leadersHome.points?.name ? `${leadersHome.points.name} ${leadersHome.points.v.toFixed(1)} PPG` : "—"}
-                        {" · "}
-                        {leadersHome.rebounds?.name ? `${leadersHome.rebounds.name} ${leadersHome.rebounds.v.toFixed(1)} RPG` : "—"}
-                        {" · "}
-                        {leadersHome.assists?.name ? `${leadersHome.assists.name} ${leadersHome.assists.v.toFixed(1)} APG` : "—"}
-                    </>
-                    }
-                />
-                </ListItem>
-            ) : (
-                <ListItem disableGutters sx={{ py: 0.25 }}>
-                <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Home leaders loading…" />
-                </ListItem>
-            )}
+        {isFinal && h2h && (
+        <Typography variant="caption" sx={{ display:'block', mt: 0.25, mb: 1, opacity: 0.8 }}>
+            After this result, the season series is {game.home.code} {h2h.homeWins}–{h2h.awayWins} {game.away.code}.
+        </Typography>
+        )}
 
-            {/* Away leaders */}
-            {leadersAway ? (
-                <ListItem disableGutters sx={{ py: 0.25 }}>
-                <ListItemText
-                    primaryTypographyProps={{ variant: "body2" }}
-                    primary={
-                    <>
-                        <strong>{game.away.name}</strong>{": "}
-                        {leadersAway.points?.name ? `${leadersAway.points.name} ${leadersAway.points.v.toFixed(1)} PPG` : "—"}
-                        {" · "}
-                        {leadersAway.rebounds?.name ? `${leadersAway.rebounds.name} ${leadersAway.rebounds.v.toFixed(1)} RPG` : "—"}
-                        {" · "}
-                        {leadersAway.assists?.name ? `${leadersAway.assists.name} ${leadersAway.assists.v.toFixed(1)} APG` : "—"}
-                    </>
-                    }
-                />
-                </ListItem>
-            ) : (
-                <ListItem disableGutters sx={{ py: 0.25 }}>
-                <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Away leaders loading…" />
-                </ListItem>
-            )}
-            </List>
-        </CardContent>
-        </Card>
+        {/* Impact players */}
+        <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+        Impact players (season averages)
+        </Typography>
+        <List dense sx={{ mt: 0 }}>
+        {/* Home leaders */}
+        {leadersHome ? (
+            <ListItem disableGutters sx={{ py: 0.25 }}>
+            <ListItemText
+                primaryTypographyProps={{ variant: "body2" }}
+                primary={
+                <>
+                    <strong>{game.home.name}</strong>{": "}
+                    {leadersHome.points?.name ? `${leadersHome.points.name} ${leadersHome.points.v.toFixed(1)} PPG` : "—"}
+                    {" · "}
+                    {leadersHome.rebounds?.name ? `${leadersHome.rebounds.name} ${leadersHome.rebounds.v.toFixed(1)} RPG` : "—"}
+                    {" · "}
+                    {leadersHome.assists?.name ? `${leadersHome.assists.name} ${leadersHome.assists.v.toFixed(1)} APG` : "—"}
+                </>
+                }
+            />
+            </ListItem>
+        ) : notesTried.leaders ? (
+            <ListItem disableGutters sx={{ py: 0.25 }}>
+            <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Leaders unavailable." />
+            </ListItem>
+        ) : (
+            <ListItem disableGutters sx={{ py: 0.25 }}>
+            <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Home leaders loading…" />
+            </ListItem>
+        )}
 
+        {/* Away leaders */}
+        {leadersAway ? (
+            <ListItem disableGutters sx={{ py: 0.25 }}>
+            <ListItemText
+                primaryTypographyProps={{ variant: "body2" }}
+                primary={
+                <>
+                    <strong>{game.away.name}</strong>{": "}
+                    {leadersAway.points?.name ? `${leadersAway.points.name} ${leadersAway.points.v.toFixed(1)} PPG` : "—"}
+                    {" · "}
+                    {leadersAway.rebounds?.name ? `${leadersAway.rebounds.name} ${leadersAway.rebounds.v.toFixed(1)} RPG` : "—"}
+                    {" · "}
+                    {leadersAway.assists?.name ? `${leadersAway.assists.name} ${leadersAway.assists.v.toFixed(1)} APG` : "—"}
+                </>
+                }
+            />
+            </ListItem>
+        ) : notesTried.leaders ? (
+            <ListItem disableGutters sx={{ py: 0.25 }}>
+            <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Leaders unavailable." />
+            </ListItem>
+        ) : (
+            <ListItem disableGutters sx={{ py: 0.25 }}>
+            <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Away leaders loading…" />
+            </ListItem>
+        )}
+        </List>
+    </CardContent>
+    </Card>
 
       {/* Quick facts */}
       <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
