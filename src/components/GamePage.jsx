@@ -111,36 +111,72 @@ function homeCodeToId(code){ const id = BDL_TEAM_ID[(code||"").toUpperCase()]; i
 // Roster → player ids (for season_averages), then compute leaders
 async function fetchTeamLeaders(teamCode, dateISO) {
   const { endYear } = seasonWindowFromISO(dateISO);
-  // 1) roster (players endpoint)
+
+  // 1) roster
   const rosterQs = new URLSearchParams({ "team_ids[]": homeCodeToId(teamCode), per_page: "100" }).toString();
   const roster = await fetchJsonViaGateway(`players?${rosterQs}`);
   const ids = Array.from(new Set((roster || []).map(p => p?.id).filter(Number))).slice(0, 30);
   if (!ids.length) return null;
 
-  // 2) season averages
+  // Try season averages first
   const saQs = new URLSearchParams({ season: String(endYear) });
   ids.forEach(id => saQs.append("player_ids[]", String(id)));
-  const avgs = await fetchJsonViaGateway(`season_averages?${saQs.toString()}`);
-  if (!Array.isArray(avgs) || !avgs.length) return null;
+  let avgs = await fetchJsonViaGateway(`season_averages?${saQs.toString()}`).catch(()=>null);
 
-  // Join names from roster
-  const byId = new Map((roster || []).map(p => [p.id, p]));
+  // if empty, fall back to recent 21 days via /stats
+  if (!Array.isArray(avgs) || avgs.length === 0) {
+    // recent window
+    const anchor = dateISO ? new Date(dateISO) : new Date();
+    const endStr = anchor.toISOString().slice(0,10);
+    const startStr = new Date(anchor.getTime() - 21*864e5).toISOString().slice(0,10);
+
+    const statsQs = new URLSearchParams({
+      "team_ids[]": homeCodeToId(teamCode),
+      start_date: startStr,
+      end_date: endStr,
+      postseason: "false",
+      per_page: "100"
+    }).toString();
+
+    // paginate (simple: first page)
+    const stats = await fetchJsonViaGateway(`stats?${statsQs}`).catch(()=>[]);
+    const byId = new Map();
+    for (const s of stats || []) {
+      const pid = s?.player?.id;
+      if (!pid) continue;
+      if (!byId.has(pid)) byId.set(pid, { gp: 0, pts:0, reb:0, ast:0 });
+      const row = byId.get(pid);
+      row.gp += 1;
+      row.pts += s?.pts || 0;
+      row.reb += s?.reb || 0;
+      row.ast += s?.ast || 0;
+    }
+    // convert to per-game averages
+    avgs = Array.from(byId.entries()).map(([pid, r])=>({
+      player_id: pid, games_played: r.gp,
+      pts: r.gp ? r.pts / r.gp : 0,
+      reb: r.gp ? r.reb / r.gp : 0,
+      ast: r.gp ? r.ast / r.gp : 0
+    }));
+  }
+
+  if (!Array.isArray(avgs) || avgs.length === 0) return null;
+
+  // join names
+  const byRoster = new Map((roster||[]).map(p=>[p.id, p]));
   const rows = avgs.map(a => ({
     id: a.player_id,
     gp: a.games_played ?? a.gp ?? 0,
-    min: a.min ?? 0,
     pts: a.pts ?? 0,
     reb: a.reb ?? 0,
     ast: a.ast ?? 0,
-    ply: byId.get(a.player_id) || null
+    ply: byRoster.get(a.player_id) || null
   }));
 
-  // pick leaders (min GP gate to avoid tiny samples)
-  const minGp = 5;
+  const minGp = 3; // slightly looser for recent window
   const top = (key) => rows.filter(r => r.gp >= minGp).sort((x,y)=> (y[key]||0)-(x[key]||0))[0];
-
   const p = top("pts"), r = top("reb"), a = top("ast");
-  const name = (row) => row?.ply ? `${row.ply.first_name || ""} ${row.ply.last_name || ""}`.trim() : null;
+  const name = (row) => row?.ply ? `${row.ply.first_name||""} ${row.ply.last_name||""}`.trim() : null;
 
   return {
     season: endYear,
