@@ -40,6 +40,10 @@ import NbaNews from "./NbaNews";
 
 import { API_BASE } from "../api/base"; // ✅ import only
 
+import Link from "@mui/material/Link";
+import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
+import { Link as RouterLink } from "react-router-dom";
+
 /* ========= small date helpers ========= */
 function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
 function addMonths(d,n){ const x=new Date(d); x.setDate(1); x.setMonth(x.getMonth()+n); return x; }
@@ -2234,18 +2238,40 @@ function GameCard({ game, onPick }) {
           )}
         </Stack>
 
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="center"
-        sx={{ mt: 0.5 }}
-      >
-        <Typography variant="caption">
-          <a href={`/game/${game.id}`} style={{ textDecoration: 'underline' }}>
-            Open full game page
-          </a>
-        </Typography>
-      </Stack>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="center"
+          sx={{ mt: 0.5, pl: 2 }}
+        >
+          <Link
+            component={RouterLink}
+            to={`/game/${game.id}`}
+            underline="hover"
+            color="primary"
+            sx={{
+              fontSize: 12,
+              fontWeight: 600,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.5,
+              px: 1,
+              py: 0.25,
+              borderRadius: 1,
+              transition: "background-color 120ms ease",
+              "&:hover": { bgcolor: "action.hover" },
+              "&:focus-visible": {
+                outline: "2px solid",
+                outlineColor: "primary.main",
+                outlineOffset: 2,
+                borderRadius: 4,
+              },
+            }}
+          >
+            Full game page
+            <ArrowRightAltIcon sx={{ fontSize: 14, ml: 0.25 }} />
+          </Link>
+        </Stack>
 
       </ListItemButton>
     </Card>

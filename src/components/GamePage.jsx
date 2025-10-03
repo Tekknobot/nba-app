@@ -3,6 +3,10 @@ import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Box, Card, CardContent, Typography, List, ListItem, ListItemText } from "@mui/material";
 
+const rawStatus = game.status || "";
+const friendlyStatus = statusLabelOf(rawStatus);
+const isFinal = /final/i.test(rawStatus);
+
 function safeDateLabel(iso, hasClock) {
   if (!iso) return "TBD";
   const d = new Date(iso);
@@ -11,6 +15,16 @@ function safeDateLabel(iso, hasClock) {
       ? new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"short" }).format(d)
       : new Intl.DateTimeFormat(undefined, { dateStyle:"medium" }).format(d);
   } catch { return "TBD"; }
+}
+
+// Derive a friendly status label (Final / In Progress / Scheduled)
+function statusLabelOf(raw) {
+  const s = String(raw || "");
+  if (/final/i.test(s)) return "Final";
+  if (/in progress|halftime|end of|quarter|q\d/i.test(s)) return s; // keep live text
+  // Some APIs stuff an ISO time into .status; if it looks ISO, show "Scheduled"
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return "Scheduled";
+  return s || "Scheduled";
 }
 
 async function bdl(url){
@@ -165,7 +179,7 @@ export default function GamePage(){
 
       {/* Short intro (helps with AdSense review) */}
       <Typography variant="body2" sx={{ mt:1.5 }}>
-        Short, human-readable preview or recap for this matchup, plus model context and quick facts.
+        Short, human-readable preview or recap below for this matchup, plus model context and quick facts.
       </Typography>
 
       {/* === Ad slot: below intro, above content === */}
@@ -186,8 +200,10 @@ export default function GamePage(){
         <CardContent sx={{ p:2 }}>
           <Typography variant="subtitle1" sx={{ fontWeight:700, mb:1 }}>Quick facts</Typography>
           <List dense>
-            <ListItem disableGutters><ListItemText primary={`Status: ${game.status || "Scheduled"}`} /></ListItem>
-            {Number.isFinite(game.home.score) && Number.isFinite(game.away.score) && (
+           <ListItem disableGutters>
+             <ListItemText primary={`Status: ${friendlyStatus}`} />
+           </ListItem>
+           {isFinal && Number.isFinite(game.home.score) && Number.isFinite(game.away.score) && (
               <ListItem disableGutters>
                 <ListItemText primary={`Final score: ${game.home.code} ${game.home.score} — ${game.away.code} ${game.away.score}`} />
               </ListItem>
