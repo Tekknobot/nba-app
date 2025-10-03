@@ -14,13 +14,13 @@ function safeDateLabel(iso, hasClock) {
 }
 
 async function bdl(url){
-  const r = await fetch(url, { cache: "no-store" });
+    const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) throw new Error(`BDL ${r.status}`);
   return r.json();
 }
 
 async function fetchGameByIdBDL(id){
-  const j = await bdl(`https://api.balldontlie.io/v1/games/${id}`);
+  const j = await bdl(`/bdl/games/${id}`);
   const g = j || {};
   return {
     id: g.id,

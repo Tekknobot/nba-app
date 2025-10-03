@@ -85,4 +85,32 @@ module.exports = function (app) {
       },
     })
   );
+
+  // D) Balldontlie (BDL) gateway: injects API key server-side (dev only)
+  // Usage from client: fetch('/bdl/games/123'); -> https://api.balldontlie.io/v1/games/123
+  app.use(
+    '/bdl',
+    createProxyMiddleware({
+      target: 'https://api.balldontlie.io',
+      changeOrigin: true,
+      secure: true,
+      pathRewrite: { '^/bdl': '/v1' },
+      onProxyReq(proxyReq) {
+        const raw = process.env.BDL_API_KEY || process.env.REACT_APP_BDL_API_KEY || '';
+        if (raw) {
+          // If your key requires "Bearer", set BDL_API_KEY="Bearer <token>" in env.
+          proxyReq.setHeader('Authorization', raw);
+        }
+        proxyReq.setHeader('Accept', 'application/json');
+        proxyReq.setHeader('Connection', 'keep-alive');
+      },
+      onProxyRes(proxyRes) {
+        proxyRes.headers['cache-control'] = 'no-store';
+        if (!('content-type' in proxyRes.headers)) {
+          proxyRes.headers['content-type'] = 'application/json; charset=utf-8';
+        }
+      },
+    })
+  );
+  
 };
