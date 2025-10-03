@@ -1,16 +1,12 @@
-// api/bdl/[...path].js
 export default async function handler(req, res) {
   try {
-    const parts = Array.isArray(req.query.path) ? req.query.path : [];
-    const suffix = parts.join("/");
+    const { id } = req.query;
     const qs = req.url.includes("?") ? "?" + req.url.split("?")[1] : "";
-    const upstream = `https://api.balldontlie.io/v1/${suffix}${qs}`;
-
+    const upstream = `https://api.balldontlie.io/v1/games/${id}${qs}`;
     const r = await fetch(upstream, {
       headers: process.env.BDL_API_KEY ? { Authorization: process.env.BDL_API_KEY } : {},
       method: req.method,
     });
-
     const body = await r.text();
     res.status(r.status);
     res.setHeader("Content-Type", r.headers.get("content-type") || "application/json; charset=utf-8");
