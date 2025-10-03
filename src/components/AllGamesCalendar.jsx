@@ -1739,6 +1739,9 @@ useEffect(() => {
         </Stack>
       </Stack>
 
+      {/* after the Last10 lists and before ProbabilityCard */}
+      <NarrativeBlock game={game} probs={probs} a={a} b={b} h2h={h2h} />
+
       {/* scrollable middle */}
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', pr: 0.5 }}>
         <Typography variant="caption" sx={{ opacity: 0.8, mb: 1, display: 'block' }}>
@@ -1764,9 +1767,6 @@ useEffect(() => {
         <Typography variant="caption" sx={{ opacity: 0.65, mt: 0.25, display:'block' }}>
           Showing last 10 this season up to {gameAnchorISO}
         </Typography>
-
-        {/* after the Last10 lists and before ProbabilityCard */}
-        <NarrativeBlock game={game} probs={probs} a={a} b={b} h2h={h2h} />
 
         <ProbabilityCard
           probs={probs}
