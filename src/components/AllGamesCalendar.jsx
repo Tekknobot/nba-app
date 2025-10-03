@@ -1398,7 +1398,6 @@ useEffect(() => {
     return () => { cancelled = true; };
   }, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
 
-
 // ------------------ Rolling recent player averages (fallback to season) ------------------
 useEffect(() => {
   if (!open || !game?.home?.code || !game?.away?.code) return;
@@ -1589,6 +1588,71 @@ useEffect(() => {
   // Small label to reflect data mode in the Top Players accordion
   const miniModeLabel = miniMode === "recent" ? "last 21 days" : "season averages (fallback)";
 
+  // ⬇️ put this inside ComparisonDrawer, anywhere before the `return ( ... )`
+  function NarrativeBlock({ game, probs, a, b, h2h }) {
+    const isFinal = (game?.status || "").toLowerCase().includes("final");
+    const home = game?.home?.code, away = game?.away?.code;
+
+    const last10Home = b?.data?.games || [];
+    const last10Away = a?.data?.games || [];
+
+    const wlt = (arr) => {
+      let w=0,l=0,t=0; arr.forEach(g => (g.result==='W'?w++:g.result==='L'?l++:t++));
+      return `${w}-${l}${t?`-${t}`:''}`;
+    };
+
+    const h2hLine = h2h?.data ? `This season, ${home} lead the series ${h2h.data.aWins}-${h2h.data.bWins}.` : "";
+
+    const modelLine = (() => {
+      if (!probs?.pHome) return "";
+      const pct = Math.round(probs.pHome * 100);
+      const mode = probs.mode === "recent" ? "recent form" : probs.mode === "prior" ? "a prior model" : "available data";
+      return `Our model, based on ${mode}, gives ${home} a ${pct}% chance at home.`;
+    })();
+
+    const finalLine = (() => {
+      if (!isFinal) return "";
+      const hs = Number(game?.homeScore ?? 0), as = Number(game?.awayScore ?? 0);
+      const winner = hs > as ? home : away;
+      return `${winner} won ${Math.max(hs,as)}–${Math.min(hs,as)}.`;
+    })();
+
+    const previewLine = (() => {
+      if (isFinal) return "";
+      const hForm = wlt(last10Home), aForm = wlt(last10Away);
+      const when = game?.hasClock
+        ? new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"short" })
+            .format(new Date(game._iso))
+        : new Intl.DateTimeFormat(undefined, { dateStyle:"medium" })
+            .format(new Date(`${game?.dateKey}T12:00:00Z`));
+      return `${away} visit ${home} on ${when}. Recent form: ${home} ${hForm}, ${away} ${aForm}.`;
+    })();
+
+    const whyLine = (() => {
+      if (!probs?.factors?.length) return "";
+      const top = probs.factors.slice(0,3).map(f => f.label.toLowerCase()).join(", ");
+      return `Key factors: ${top}.`;
+    })();
+
+    return (
+      <Card variant="outlined" sx={{ borderRadius:1, mt:1.5 }}>
+        <CardContent sx={{ p:2 }}>
+          <Typography component="h2" variant="subtitle1" sx={{ fontWeight:700, mb:0.5 }}>
+            {isFinal ? "Game recap" : "Game preview"}
+          </Typography>
+          {isFinal ? (
+            <Typography variant="body2" sx={{ mb:0.75 }}>{finalLine}</Typography>
+          ) : (
+            <Typography variant="body2" sx={{ mb:0.75 }}>{previewLine}</Typography>
+          )}
+          {modelLine && <Typography variant="body2" sx={{ mb:0.5 }}>{modelLine}</Typography>}
+          {h2hLine && <Typography variant="body2" sx={{ mb:0.5 }}>{h2hLine}</Typography>}
+          {whyLine && <Typography variant="body2">{whyLine}</Typography>}
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Drawer
       anchor="right"
@@ -1655,6 +1719,9 @@ useEffect(() => {
         <Typography variant="caption" sx={{ opacity: 0.65, mt: 0.25, display:'block' }}>
           Showing last 10 this season up to {gameAnchorISO}
         </Typography>
+
+        {/* after the Last10 lists and before ProbabilityCard */}
+        <NarrativeBlock game={game} probs={probs} a={a} b={b} h2h={h2h} />
 
         <ProbabilityCard
           probs={probs}
