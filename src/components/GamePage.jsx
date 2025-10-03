@@ -18,6 +18,15 @@ function safeDateLabel(iso, hasClock) {
   } catch { return "TBD"; }
 }
 
+function calendarDateLabel(dateKey) {
+  // Force noon UTC on the date-only key so the day never shifts by timezone
+  if (!dateKey) return "TBD";
+  const d = new Date(`${dateKey}T12:00:00Z`);
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(d);
+  } catch { return "TBD"; }
+}
+
 async function bdl(url) {
   const r = await fetch(url, { cache: "no-store" });
   const ct = (r.headers.get("content-type") || "").toLowerCase();
@@ -37,6 +46,7 @@ async function fetchGameById(id) {
     id: g.id,
     status: g.status || "",
     dateISO: g.date || null,
+    dateKey: (g.date || "").slice(0, 10),
     hasClock: !!(g.date && new Date(g.date).getUTCHours() !== 0),
     home: {
       code: (g.home_team?.abbreviation || "").toUpperCase(),
@@ -116,7 +126,7 @@ export default function GamePage() {
     <Box sx={{ maxWidth: 720, mx: "auto", p: 2 }}>
       <Typography variant="h4" sx={{ fontWeight: 700 }}>{title}</Typography>
       <Typography variant="body2" sx={{ opacity: 0.85, mt: 0.5 }}>
-        {game.away.name} at {game.home.name} · {safeDateLabel(game.dateISO, game.hasClock)}
+        {game.away.name} at {game.home.name} · {calendarDateLabel(game.dateKey)}
       </Typography>
 
       <Typography variant="body2" sx={{ mt: 1.5 }}>
@@ -144,7 +154,7 @@ export default function GamePage() {
           <Typography variant="body2">
             {isFinal
               ? `All wrapped up: ${(game.home.score > game.away.score ? game.home.code : game.away.code)} win ${Math.max(game.home.score ?? 0, game.away.score ?? 0)}–${Math.min(game.home.score ?? 0, game.away.score ?? 0)}.`
-              : `${game.away.code} visit ${game.home.code} on ${safeDateLabel(game.dateISO, game.hasClock)}.`}
+              : `${game.away.code} visit ${game.home.code} on ${calendarDateLabel(game.dateKey)}.`}
           </Typography>
         </CardContent>
       </Card>
