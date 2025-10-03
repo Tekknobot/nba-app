@@ -2233,6 +2233,13 @@ function GameCard({ game, onPick }) {
             />
           )}
         </Stack>
+
+        <Typography variant="caption" sx={{ display:'block', mt:0.25 }}>
+          <a href={`/game/${game.id}`} style={{ textDecoration:'underline' }}>
+            Open full game page
+          </a>
+        </Typography>
+
       </ListItemButton>
     </Card>
   );

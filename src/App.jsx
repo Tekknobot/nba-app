@@ -6,6 +6,7 @@ import AllGamesCalendar from "./components/AllGamesCalendar";
 import About from "./components/About";
 import Contact from "./components/Contact";
 import Header from "./components/Header";
+import GamePage from "./components/GamePage";
 
 export default function App(){
   return (
@@ -15,6 +16,7 @@ export default function App(){
         <Routes>
           <Route path="/" element={<Navigate to="/all" replace />} />
           <Route path="/all" element={<AllGamesCalendar />} />
+          <Route path="/game/:id" element={<GamePage />} />
           <Route path="/about" element={<About />} />
           <Route path="/contact" element={<Contact />} />
         </Routes>
