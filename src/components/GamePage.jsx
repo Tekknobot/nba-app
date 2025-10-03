@@ -58,25 +58,28 @@ async function fetchGameByIdBDL(id){
   };
 }
 
-function GameNarrative({ game, modelPct=50, modeLabel="recent form" }) {
+function GameNarrative({ game, modelPct = 50, modeLabel = "recent form" }) {
+  if (!game) return null;
+
   const status = (game?.status || "").toLowerCase();
   const isFinal = status.includes("final");
   const isLive  = /in progress|halftime|end of|quarter|q\d/.test(status);
 
-  const home = game.home.code, away = game.away.code;
+  const home = game.home?.code || "HOME";
+  const away = game.away?.code || "AWAY";
   const when = safeDateLabel(game.dateISO, game.hasClock);
 
   let heading = "Game preview";
   let topLine = `${away} visit ${home} on ${when}. Recent form: ${home} 0-0, ${away} 0-0.`;
   if (isLive) {
     heading = "Live update";
-    topLine = `Underway: ${home} ${game.home.score ?? "–"} — ${away} ${game.away.score ?? "–"} (${game.status}).`;
+    topLine = `Underway: ${home} ${game.home?.score ?? "–"} — ${away} ${game.away?.score ?? "–"} (${game.status}).`;
   }
   if (isFinal) {
     heading = "Game recap";
-    const hs = game.home.score, as = game.away.score;
+    const hs = game.home?.score, as = game.away?.score;
     topLine = (Number.isFinite(hs) && Number.isFinite(as))
-      ? `All wrapped up: ${(hs>as?home:away)} win ${Math.max(hs,as)}–${Math.min(hs,as)}.`
+      ? `All wrapped up: ${(hs > as ? home : away)} win ${Math.max(hs, as)}–${Math.min(hs, as)}.`
       : `Final: ${away} at ${home}.`;
   }
 
@@ -85,23 +88,18 @@ function GameNarrative({ game, modelPct=50, modeLabel="recent form" }) {
     : "";
 
   return (
-    <Card variant="outlined" sx={{ borderRadius:1 }}>
-      <CardContent sx={{ p:2 }}>
-         <Typography color="warning.main" sx={{ mt:1, whiteSpace:'pre-wrap' }}>
-           {String(err)}
-         </Typography>
-         <Typography variant="caption" sx={{ display:'block', mt:1.5 }}>
-           Tip: open this in a new tab to verify JSON is returned →
-           <a href={`${BDL_BASE}/games/${encodeURIComponent(id)}`} target="_blank" rel="noreferrer">
-             {`${BDL_BASE}/games/${id}`}
-           </a>
-         </Typography>
-        <Typography variant="body2" sx={{ mb:1 }}>{topLine}</Typography>
+    <Card variant="outlined" sx={{ borderRadius: 1 }}>
+      <CardContent sx={{ p: 2 }}>
+        <Typography component="h2" variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
+          {heading}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 1 }}>{topLine}</Typography>
         {modelLine && <Typography variant="body2">{modelLine}</Typography>}
       </CardContent>
     </Card>
   );
 }
+
 
 export default function GamePage(){
   const { id } = useParams();
@@ -137,6 +135,12 @@ export default function GamePage(){
         <Typography color="warning.main" sx={{ mt:1, whiteSpace:'pre-wrap' }}>
           {String(err)}
         </Typography>
+         <Typography variant="caption" sx={{ display:'block', mt:1.5 }}>
+           Tip: open this in a new tab to verify JSON is returned →
+        <a href={`${BDL_BASE}/games/${encodeURIComponent(id)}`} target="_blank" rel="noreferrer">
+             {`${BDL_BASE}/games/${id}`}
+        </a>
+     </Typography>        
         <Typography sx={{ mt:2 }}><Link to="/all">← Back to calendar</Link></Typography>
       </Box>
     );
