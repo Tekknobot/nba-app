@@ -14,9 +14,20 @@ function safeDateLabel(iso, hasClock) {
 }
 
 async function bdl(url){
-    const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error(`BDL ${r.status}`);
-  return r.json();
+  const r = await fetch(url, { cache: "no-store" });
+  const ct = (r.headers.get("content-type") || "").toLowerCase();
+  const text = await r.text();
+  if (!r.ok) {
+    // include a snippet of the body for debugging (often shows 401/HTML)
+    throw new Error(`BDL ${r.status}: ${text.slice(0,180)}`);
+  }
+  if (ct.includes("application/json")) {
+    try { return JSON.parse(text); } catch (e) {
+      throw new Error(`BDL parse error: ${e.message}. First bytes: ${text.slice(0,120)}`);
+    }
+  }
+  // Not JSON (likely your index.html because proxy isn't being used)
+  throw new Error(`BDL non-JSON response (${ct || "unknown"}). First bytes: ${text.slice(0,120)}`);
 }
 
 async function fetchGameByIdBDL(id){
@@ -110,7 +121,9 @@ export default function GamePage(){
     return (
       <Box sx={{ maxWidth:720, mx:"auto", p:2 }}>
         <Typography variant="h6">Game</Typography>
-        <Typography color="warning.main" sx={{ mt:1 }}>{err}</Typography>
+        <Typography color="warning.main" sx={{ mt:1, whiteSpace:'pre-wrap' }}>
+          {String(err)}
+        </Typography>
         <Typography sx={{ mt:2 }}><Link to="/all">← Back to calendar</Link></Typography>
       </Box>
     );
