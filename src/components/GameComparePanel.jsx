@@ -109,19 +109,6 @@ function modelVerdict(game) {
   };
 }
 
-// --- season averages batch for a set of player ids ---
-async function fetchSeasonAveragesBatchBDL(playerIds, seasonEndYear) {
-  if (!playerIds?.length) return [];
-  const u = new URL("https://api.balldontlie.io/v1/season_averages");
-  u.searchParams.set("season", String(seasonEndYear));
-  for (const id of playerIds) u.searchParams.append("player_ids[]", String(id));
-  const r = await fetch(u, { headers: bdlHeaders() });
-  if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-  if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-  const j = await r.json();
-  return Array.isArray(j?.data) ? j.data : [];
-}
-
 // --- pick the “season end year” for a given anchor date ---
 function seasonEndYearFrom(anchorISO) {
   const d = anchorISO ? new Date(anchorISO) : new Date();
