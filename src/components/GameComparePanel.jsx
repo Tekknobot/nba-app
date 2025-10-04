@@ -258,13 +258,57 @@ async function fetchSeasonAveragesBatchBDL(playerIds, seasonEndYear) {
   return Array.isArray(j?.data) ? j.data : [];
 }
 
-async function fetchRecentPlayerAveragesBDL(teamAbbr, { days = 21, anchorISO = null } = {}) {
+async function fetchRecentPlayerAveragesBDL(
+  teamAbbr,
+  { days = 21, anchorISO = null, topN = 3 } = {}
+) {
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
   const headers = bdlHeaders();
   const { start, end } = windowISO({ anchorISO, days });
 
-  // 1) Try team_ids[] + date window (preferred)
+  const minToNum = (m) => {
+    const [mm, ss] = String(m || "0:00").split(":").map(Number);
+    return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
+  };
+
+  const aggregateRecent = (rows) => {
+    const filtered = rows.filter(
+      (s) => (s?.team?.abbreviation || s?.team_abbreviation || "").toUpperCase() === teamAbbr
+    );
+    const by = new Map();
+    for (const s of filtered) {
+      const pid = Number(s?.player?.id ?? s?.player_id);
+      if (!Number.isFinite(pid)) continue;
+      if (!by.has(pid)) by.set(pid, { player_id: pid, player: s.player || null, gp: 0, min: 0, pts: 0, reb: 0, ast: 0 });
+      const p = by.get(pid);
+      p.gp += 1;
+      const [mm, ss] = String(s?.min || s?.minutes || "0:00").split(":").map(Number);
+      const mins = (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
+      p.min += mins;
+      p.pts += Number(s?.pts || 0);
+      p.reb += Number(s?.reb || 0);
+      p.ast += Number(s?.ast || 0);
+    }
+    let players = Array.from(by.values()).map((p) => ({
+      player_id: p.player_id,
+      player: p.player,
+      min: `${Math.floor((p.min / p.gp) || 0)}:${String(
+        Math.round((((p.min / p.gp) % 1) * 60)) || 0
+      ).padStart(2, "0")}`,
+      pts: (p.pts / p.gp) || 0,
+      reb: (p.reb / p.gp) || 0,
+      ast: (p.ast / p.gp) || 0,
+    }));
+    players.sort((a, b) => {
+      const bm = minToNum(b.min), am = minToNum(a.min);
+      if (bm !== am) return bm - am;
+      return (b.pts || 0) - (a.pts || 0);
+    });
+    return players.slice(0, topN);
+  };
+
+  // 1) Try team_ids[] window
   try {
     const u = new URL("https://api.balldontlie.io/v1/stats");
     u.searchParams.set("team_ids[]", String(teamId));
@@ -283,125 +327,44 @@ async function fetchRecentPlayerAveragesBDL(teamAbbr, { days = 21, anchorISO = n
       page = j.meta.next_page;
     }
 
-    // keep only this team’s rows (stat rows can include both teams)
-    const filtered = rows.filter(s =>
-      (s?.team?.abbreviation || s?.team_abbreviation || "").toUpperCase() === teamAbbr
-    );
-
-    // aggregate
-    const byPlayer = new Map();
-    for (const s of filtered) {
-      const pid = Number(s?.player?.id ?? s?.player_id);
-      if (!Number.isFinite(pid)) continue;
-      if (!byPlayer.has(pid)) {
-        byPlayer.set(pid, { player_id: pid, player: s.player || null, gp: 0, min: 0, pts: 0, reb: 0, ast: 0 });
-      }
-      const p = byPlayer.get(pid);
-      p.gp += 1;
-      const [mm, ss] = String(s?.min || s?.minutes || "0:00").split(":").map(Number);
-      const mins = (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss/60 : 0);
-      p.min += mins;
-      p.pts += Number(s?.pts || 0);
-      p.reb += Number(s?.reb || 0);
-      p.ast += Number(s?.ast || 0);
-    }
-
-    let players = Array.from(byPlayer.values()).map(p => ({
-      player_id: p.player_id,
-      player: p.player,
-      min: `${Math.floor((p.min / p.gp) || 0)}:${String(Math.round((((p.min / p.gp) % 1) * 60)) || 0).padStart(2,'0')}`,
-      pts: (p.pts / p.gp) || 0,
-      reb: (p.reb / p.gp) || 0,
-      ast: (p.ast / p.gp) || 0,
-    }));
-
-    // rank
-    const minToNum = (m) => {
-      const [mm, ss] = String(m || "0:00").split(":").map(Number);
-      return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
-    };
-    players.sort((a,b) => {
-      const bm = minToNum(b.min), am = minToNum(a.min);
-      if (bm !== am) return bm - am;
-      return (b.pts||0) - (a.pts||0);
-    });
-
+    const players = aggregateRecent(rows);
     if (players.length) return { players, _mode: "recent" };
-    // fallthrough to season if empty
   } catch (e) {
-    // If 400/402/403 (or any non-ok), we’ll take the robust roster path next
-    console.warn("[TopPlayers] recent window failed; falling back to roster+season", e);
+    console.warn("[TopPlayers] team_ids window failed; retrying with player_ids[]", e);
   }
 
-  // 2) Retry the same window using player_ids[] (some 400s are specific to team_ids[] windows)
+  // 2) Retry player_ids[] window
   try {
     const roster = await fetchTeamRosterByTeamIdBDL(teamAbbr);
-    const ids = Array.from(new Set(roster.map(p => Number(p?.id)).filter(Boolean))).slice(0, 30);
+    const ids = Array.from(new Set(roster.map((p) => Number(p?.id)).filter(Boolean))).slice(0, 30);
     if (ids.length) {
-      const headers2 = bdlHeaders();
-      const u = new URL("https://api.balldontlie.io/v1/stats");
-      u.searchParams.set("start_date", start);
-      u.searchParams.set("end_date", end);
-      u.searchParams.set("postseason", "false");
-      u.searchParams.set("per_page", "100");
-      ids.forEach(id => u.searchParams.append("player_ids[]", String(id)));
+      const u2 = new URL("https://api.balldontlie.io/v1/stats");
+      u2.searchParams.set("start_date", start);
+      u2.searchParams.set("end_date", end);
+      u2.searchParams.set("postseason", "false");
+      u2.searchParams.set("per_page", "100");
+      ids.forEach((id) => u2.searchParams.append("player_ids[]", String(id)));
 
       let page = 1, rows = [];
       while (true) {
-        u.searchParams.set("page", String(page));
-        const j = await fetchJsonOrThrow(u, { headers: headers2 });
-        const data = Array.isArray(j?.data) ? j.data : [];
-        rows.push(...data);
-        if (!j?.meta?.next_page) break;
-        page = j.meta.next_page;
+        u2.searchParams.set("page", String(page));
+        const j2 = await fetchJsonOrThrow(u2, { headers });
+        const data2 = Array.isArray(j2?.data) ? j2.data : [];
+        rows.push(...data2);
+        if (!j2?.meta?.next_page) break;
+        page = j2.meta.next_page;
       }
 
-      // aggregate
-      const byPlayer = new Map();
-      for (const s of rows) {
-        const pid = Number(s?.player?.id ?? s?.player_id);
-        if (!Number.isFinite(pid)) continue;
-        if (!byPlayer.has(pid)) {
-          byPlayer.set(pid, { player_id: pid, player: s.player || null, gp: 0, min: 0, pts: 0, reb: 0, ast: 0 });
-        }
-        const p = byPlayer.get(pid);
-        p.gp += 1;
-        const [mm, ss] = String(s?.min || s?.minutes || "0:00").split(":").map(Number);
-        const mins = (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss/60 : 0);
-        p.min += mins;
-        p.pts += Number(s?.pts || 0);
-        p.reb += Number(s?.reb || 0);
-        p.ast += Number(s?.ast || 0);
-      }
-
-      const minToNum = (m) => {
-        const [mm, ss] = String(m || "0:00").split(":").map(Number);
-        return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
-      };
-
-      let players = Array.from(byPlayer.values()).map(p => ({
-        player_id: p.player_id,
-        player: p.player,
-        min: `${Math.floor((p.min / p.gp) || 0)}:${String(Math.round((((p.min / p.gp) % 1) * 60)) || 0).padStart(2,'0')}`,
-        pts: (p.pts / p.gp) || 0,
-        reb: (p.reb / p.gp) || 0,
-        ast: (p.ast / p.gp) || 0,
-      }))
-      .sort((a,b) => {
-        const bm = minToNum(b.min), am = minToNum(a.min);
-        if (bm !== am) return bm - am;
-        return (b.pts||0) - (a.pts||0);
-      });
-
+      const players = aggregateRecent(rows);
       if (players.length) return { players, _mode: "recent" };
     }
   } catch (e2) {
-    console.warn("[TopPlayers] player_ids window failed; falling back to season", e2);
+    console.warn("[TopPlayers] player_ids window failed; falling back to season averages", e2);
   }
 
-  // 3) Final fallback: season averages (current season, else previous)
+  // 3) Season averages fallback
   const roster = await fetchTeamRosterByTeamIdBDL(teamAbbr).catch(() => []);
-  const ids = Array.from(new Set(roster.map(p => Number(p?.id)).filter(Boolean))).slice(0, 30);
+  const ids = Array.from(new Set(roster.map((p) => Number(p?.id)).filter(Boolean))).slice(0, 30);
   const season = seasonEndYearFrom(anchorISO);
   let avgs = await fetchSeasonAveragesBatchBDL(ids, season);
   let usedSeason = season;
@@ -409,28 +372,23 @@ async function fetchRecentPlayerAveragesBDL(teamAbbr, { days = 21, anchorISO = n
     avgs = await fetchSeasonAveragesBatchBDL(ids, season - 1);
     usedSeason = season - 1;
   }
-  const byId = new Map(roster.map(p => [Number(p?.id), p]));
-  const minToNum = (m) => {
-    const [mm, ss] = String(m || "0:00").split(":").map(Number);
-    return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
-  };
-  const players = (avgs || [])
-    .map(a => ({
-      player_id: a.player_id,
-      player: byId.get(Number(a.player_id)) || null,
-      min: a.min || "0:00",
-      pts: a.pts || 0,
-      reb: a.reb || 0,
-      ast: a.ast || 0,
-    }))
-    .sort((x, y) => {
-      const ym = minToNum(y.min), xm = minToNum(x.min);
-      if (ym !== xm) return ym - xm;
-      return (y.pts || 0) - (x.pts || 0);
-    })
-    .slice(0, 3);
+  const byId = new Map(roster.map((p) => [Number(p?.id), p]));
 
-  return { players, _mode: "season-fallback", _season: usedSeason };
+  let players = (avgs || []).map((a) => ({
+    player_id: a.player_id,
+    player: byId.get(Number(a.player_id)) || null,
+    min: a.min || "0:00",
+    pts: a.pts || 0,
+    reb: a.reb || 0,
+    ast: a.ast || 0,
+  }));
+  players.sort((x, y) => {
+    const ym = minToNum(y.min), xm = minToNum(x.min);
+    if (ym !== xm) return ym - xm;
+    return (y.pts || 0) - (x.pts || 0);
+  });
+
+  return { players: players.slice(0, topN), _mode: "season-fallback", _season: usedSeason };
 }
 
 /* ====================== prior edge (more accurate model) ====================== */
