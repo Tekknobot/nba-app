@@ -89,64 +89,27 @@ async function fetchPredictionsRange(startISO, endISO) {
   } catch {}
   return {};
 }
-
-// replace your existing resolveFromContainer with this
 function resolveFromContainer(container, dateKey, away, home) {
-  const wantDay = new Date(`${dateKey}T12:00:00Z`); // noon UTC avoids DST edge cases
-  const wantCodes = new Set([codeOfTeam(away), codeOfTeam(home), nameOfTeam(away), nameOfTeam(home)]);
-
-  // Exact-key object (fast path)
   if (container && !Array.isArray(container)) {
-    for (const k of keyVariants(dateKey, away, home)) {
-      const v = container[k];
-      if (v) return v;
-    }
-    // also check for nested arrays like { data: [...] } or { rows: [...] }
-    const nested = Array.isArray(container.data) ? container.data
-                  : Array.isArray(container.rows) ? container.rows
-                  : null;
-    if (nested) container = nested; // fall through to array path
-    else return null;
+    for (const k of keyVariants(dateKey, away, home)) { const v = container[k]; if (v) return v; }
   }
-
-  // Array path with fuzzy matching (±1 day, home/away-insensitive)
   if (Array.isArray(container)) {
-    let best = null, bestPenalty = Infinity;
-
     for (const item of container) {
-      const dRaw = norm(item.date || item.gameDate || item.d);
-      if (!dRaw) continue;
-
-      // Parse item date; accept YYYY-MM-DD or full ISO
-      const dIso = dRaw.length === 10 ? `${dRaw}T12:00:00Z` : dRaw;
-      const dObj = new Date(dIso);
-      if (Number.isNaN(dObj.getTime())) continue;
-
+      const d  = norm(item.date || item.gameDate || item.d);
       const aw = norm(item.away || item.awayCode || item.visitor || item.v);
       const hm = norm(item.home || item.homeCode || item.h);
-      if (!aw || !hm) continue;
-
-      // team matching (ignore home/away orientation)
-      const itemTeams = new Set([aw, hm]);
-      const teamMatch =
-        (itemTeams.has(codeOfTeam(away)) || itemTeams.has(nameOfTeam(away))) &&
-        (itemTeams.has(codeOfTeam(home)) || itemTeams.has(nameOfTeam(home)));
-      if (!teamMatch) continue;
-
-      // date closeness penalty (in days)
-      const daysDiff = Math.abs((dObj - wantDay) / 86400000); // ms per day
-      if (daysDiff <= 1.5) { // accept same day or ±1
-        const penalty = daysDiff; // smaller is better
-        if (penalty < bestPenalty) { bestPenalty = penalty; best = item; }
-      }
+      if (d !== norm(dateKey)) continue;
+      const codesMatch =
+        (aw === codeOfTeam(away) || aw === nameOfTeam(away)) &&
+        (hm === codeOfTeam(home) || hm === nameOfTeam(home));
+      const swappedMatch =
+        (aw === codeOfTeam(home) || aw === nameOfTeam(home)) &&
+        (hm === codeOfTeam(away) || hm === nameOfTeam(away));
+      if (codesMatch || swappedMatch) return item;
     }
-    if (best) return best;
   }
-
   return null;
 }
-
-
 async function attachPredictionsForMonth(rows) {
   if (!rows?.length) return rows;
   const startISO = rows[0].dateKey;
@@ -247,29 +210,25 @@ function codeify(teamObjOrStr, fallback = '') {
   if (typeof teamObjOrStr === 'string') return teamObjOrStr.toUpperCase();
   return (teamObjOrStr.code || teamObjOrStr.abbr || teamObjOrStr.name || fallback).toUpperCase();
 }
-// inside TopThreePicks, ensure you have a lenient picker like this:
-function predictedWinnerCode(game){
-  // numeric prob first
-  const ph = Number(game?.model?.pHome);
-  if (Number.isFinite(ph)) return ph >= 0.5 ? codeify(game.home) : codeify(game.away);
-
-  // then any string fields
-  const cands = [
-    game?.model?.predictedWinner, game?.model?.winner,
-    game?.prediction?.winner, game?.prediction?.predictedWinner,
-    game?.predictedWinner, game?.predictedWinnerCode, game?.odds?.modelPick
+function getPredictedWinnerCode(game) {
+  const homeCode = codeify(game?.home, null);
+  const awayCode = codeify(game?.away, null);
+  const stringPickCandidates = [
+    game?.model?.predictedWinner, game?.model?.winner, game?.prediction?.winner,
+    game?.prediction?.predictedWinner, game?.predictedWinner, game?.predictedWinnerCode, game?.odds?.modelPick,
   ];
-  for (const c of cands){
+  for (const c of stringPickCandidates) {
     if (!c) continue;
-    const raw = String(typeof c === "string" ? c : (c.code||c.abbr||c.name||"")).toUpperCase().trim();
-    if (raw==="HOME") return codeify(game.home);
-    if (raw==="AWAY") return codeify(game.away);
-    const code = codeify(raw);
+    const raw = String(typeof c === "string" ? c : (c.code || c.abbr || c.name || "")).toUpperCase().trim();
+    if (raw === "HOME" && homeCode) return homeCode;
+    if (raw === "AWAY" && awayCode) return awayCode;
+    const code = codeify(raw, null);
     if (code) return code;
   }
+  const pHome = Number(game?.model?.pHome);
+  if (Number.isFinite(pHome) && homeCode && awayCode) return pHome > 0.5 ? homeCode : awayCode;
   return null;
 }
-
 function getActualWinnerCode(game) {
   const home = codeify(game?.home, 'HOME');
   const away = codeify(game?.away, 'AWAY');
@@ -597,14 +556,6 @@ export default function AllGamesCalendar(){
   const selectedKey = dateKeyFromDate(selectedDate);
   const selectedGames = eventsMap.get(selectedKey) || [];
 
-  useEffect(() => {
-    const withPick = (selectedGames || []).filter(g => {
-      const pick = (g?.model?.predictedWinner) || Number.isFinite(g?.model?.pHome);
-      return !!pick;
-    }).length;
-    console.log('[TopThreePicks] selectedGames:', selectedGames.length, 'withModel:', withPick);
-  }, [selectedGames]);
-
   const stripRef = useRef(null);
   useEffect(()=>{
     const idx = monthDays.findIndex(d => dateKeyFromDate(d)===selectedKey);
@@ -740,7 +691,7 @@ export default function AllGamesCalendar(){
       {/* drawer */}
       <ComparisonDrawer open={compareOpen} onClose={()=> setCompareOpen(false)} game={compareGame} />
 
-      {/* Top 3 of the Day */}   
+      {/* drawer */}   
       <TopThreePicks games={selectedGames} />
 
       {/* news */}
