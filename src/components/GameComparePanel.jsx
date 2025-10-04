@@ -282,19 +282,23 @@ function Last10List({ title, loading, error, data }){
   );
 }
 
-function ProbabilityCard({ game }) {
+function ProbabilityCard({ game, edge }) {
   // verdict works from either explicit predictedWinner or pHome + final score
   const verdict = modelVerdict(game);
 
-  // We still show the percent/bar if pHome exists; otherwise we show a simple pick line.
-  const pHome = Number(game?.model?.pHome);
+  // choose probability: prefer model.pHome, otherwise the recent-form edge
+  const pModel = Number(game?.model?.pHome);
+  const hasModelProb = Number.isFinite(pModel);
+  const pFromEdge = Number(edge?.pHome);
+  const hasEdgeProb = Number.isFinite(pFromEdge);
+
+  const pHome = hasModelProb ? pModel : (hasEdgeProb ? pFromEdge : NaN);
   const hasProb = Number.isFinite(pHome);
   const pct = hasProb ? Math.round(pHome * 100) : null;
 
   // If we have neither prob nor verdict, render nothing.
   if (!hasProb && !verdict) return null;
 
-  // for a tiny helper label when we only have a pick
   const homeCode = game?.home?.code;
   const awayCode = game?.away?.code;
 
@@ -309,6 +313,16 @@ function ProbabilityCard({ game }) {
             {hasProb && (
               <Typography variant="caption" sx={{ opacity:0.7 }}>
                 (home win)
+              </Typography>
+            )}
+            {!hasModelProb && hasEdgeProb && (
+              <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
+                recent form
+              </Typography>
+            )}
+            {hasModelProb && (
+              <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
+                model prob
               </Typography>
             )}
           </Stack>
@@ -347,6 +361,18 @@ function ProbabilityCard({ game }) {
             Model pick: <strong>{getPredictedWinnerCode(game) || '—'}</strong>
           </Typography>
         )}
+
+        {/* factors (only if we’re using the recent-form edge or have edge factors) */}
+        {(edge?.factors?.length) ? (
+          <List dense sx={{ mt:1 }}>
+            {edge.factors.slice(0,3).map((f,i)=>(
+              <ListItem key={i} disableGutters sx={{ py:0.25 }}>
+                <ListItemText primaryTypographyProps={{ variant:'body2' }}
+                              primary={`${f.label}: ${f.value}`} />
+              </ListItem>
+            ))}
+          </List>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -392,6 +418,32 @@ function NarrativeBlock({ game, a, b, h2h, mini, miniModeLabel = "last 21 days" 
   );
 }
 
+// ---- recent-form edge from the two last-10 lists ----
+function computeRecentEdge(aData, bData) {
+  // aData = away last-10 pack, bData = home last-10 pack
+  const away = aData?.games || [];
+  const home = bData?.games || [];
+  if (!home.length || !away.length) return null;
+
+  const W = (arr)=>arr.filter(g=>g.result==='W').length;
+  const L = (arr)=>arr.filter(g=>g.result==='L').length;
+
+  // "homeEdge" = (home W-L) - (away W-L), in [-10..+10]
+  const homeEdge = (W(home)-L(home)) - (W(away)-L(away));
+
+  // map to probability with a gentle logistic; scale tunes sharpness
+  const scale = 3.0;
+  const pHome = 1 / (1 + Math.exp(-homeEdge/scale));
+
+  // build simple factors
+  const f = [
+    { label: 'Recent form (H−A)', value: `${homeEdge > 0 ? '+' : ''}${homeEdge}` },
+    { label: 'Home-court', value: '+ ~2–3 pts' },
+  ];
+  return { pHome, factors: f };
+}
+
+
 // ========= main shared panel =========
 export default function GameComparePanel({ game }) {
   const [a, setA] = useState({ loading: true, error: null, data: null }); // away last-10
@@ -401,6 +453,8 @@ export default function GameComparePanel({ game }) {
   const [miniModeLabel, setMiniModeLabel] = useState("last 21 days");
 
   const anchorISO = (game?._iso || "").slice(0,10) || (game?.dateKey || new Date().toISOString().slice(0,10));
+
+  const [edge, setEdge] = useState(null);
 
   // last-10 (this season up to anchor)
   useEffect(()=>{ let cancelled=false; (async()=>{
@@ -422,6 +476,15 @@ export default function GameComparePanel({ game }) {
       setB({loading:false,error:msg,data:{ games: [] }});
     }
   })(); return ()=>{cancelled=true}; }, [game?.home?.code, game?.away?.code, anchorISO]);
+
+    // when last-10 lists are ready, compute a lightweight edge
+    useEffect(() => {
+    if (!a.loading && !b.loading && !a.error && !b.error && a.data && b.data) {
+        setEdge(computeRecentEdge(a.data, b.data));
+    } else {
+        setEdge(null);
+    }
+    }, [a.loading, b.loading, a.error, b.error, a.data, b.data]);
 
   // h2h (this season)
   useEffect(()=>{ let cancelled=false; (async()=>{
@@ -473,7 +536,7 @@ export default function GameComparePanel({ game }) {
       </Typography>
 
       {/* Probability (simple) */}
-      <ProbabilityCard game={game} />
+      <ProbabilityCard game={game} edge={edge} />
 
       {/* H2H */}
       {h2h.loading ? (
