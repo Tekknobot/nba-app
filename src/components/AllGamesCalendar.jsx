@@ -11,31 +11,13 @@ import CloseIcon from "@mui/icons-material/Close";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import "@fontsource/bebas-neue"; // defaults to 400 weight
 
-import { Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 
 import SportsBasketballIcon from "@mui/icons-material/SportsBasketball";
 import GameComparePanel from "./GameComparePanel";
 
-import {
-  summarizeLastNGames,
-  daysRestBefore,
-  isBackToBack,
-  computeGameProbabilities,
-  explainFactors,
-} from "../utils/probability";
-
-import {
-  formatISOToLocal,
-  formatISOInZone,
-  shortLocal,
-  shortInET,
-  timeOnlyET,
-  formatGameLabel,
-} from "../utils/datetime";
+import { formatGameLabel } from "../utils/datetime";
 
 import NbaNews from "./NbaNews";
 
@@ -65,37 +47,7 @@ const TEAM_CODE = {
   "Sacramento Kings":"SAC","San Antonio Spurs":"SAS","Toronto Raptors":"TOR","Utah Jazz":"UTA","Washington Wizards":"WAS"
 };
 
-/* ========= balldontlie (free) team ids ========= */
-const BDL_TEAM_ID = {
-  ATL:1, BOS:2, BRK:3, BKN:3, CHO:4, CHA:4, CHI:5, CLE:6, DAL:7, DEN:8,
-  DET:9, GSW:10, HOU:11, IND:12, LAC:13, LAL:14, MEM:15, MIA:16, MIL:17,
-  MIN:18, NOP:19, NYK:20, OKC:21, ORL:22, PHI:23, PHX:24, PHO:24, POR:25,
-  SAC:26, SAS:27, TOR:28, UTA:29, WAS:30
-};
-// 2024–25 season window (season end year = 2025; “summer-ish”)
-const SEASON_START = "2024-10-01";
-const SEASON_END   = "2025-06-30";
-
-// --- DROP-IN: pretty number + name helpers ---
-const nf1 = (v) => (v ?? 0).toFixed(1); // one decimal everywhere
-function initials(first = "", last = "") {
-  const f = (first || "").trim(); const l = (last || "").trim();
-  return `${f ? f[0] : ""}${l ? l[0] : ""}`.toUpperCase() || "•";
-}
-
-const logit = (p) => Math.log(Math.max(1e-9, Math.min(1-1e-9, p)) / (1 - Math.max(1e-9, Math.min(1-1e-9, p))));
-const ilogit = (z) => 1 / (1 + Math.exp(-z));
-const clamp01 = (x) => Math.max(0, Math.min(1, x));
-
-
-function displayName(player, fallbackId) {
-  if (!player) return `#${fallbackId}`;
-  const f = (player.first_name || "").trim();
-  const l = (player.last_name || "").trim();
-  return l ? `${f ? f[0] + ". " : ""}${l}` : (f || `#${fallbackId}`);
-}
-
-// --- Predictions attach/merge (legacy-tolerant, single source of truth) -----
+/* ========= Predictions attach/merge ========= */
 function norm(s) {
   return String(s || "").trim().toUpperCase();
 }
@@ -194,739 +146,32 @@ async function attachPredictionsForMonth(rows) {
 
   const container = await fetchPredictionsRange(startISO, endISO);
 
-    for (const r of rows) {
+  for (const r of rows) {
     const found = resolveFromContainer(container, r.dateKey, r.away, r.home);
     if (!found) continue;
 
     // 1) Normalize explicit pick (accept codes, names, and "HOME"/"AWAY")
     let pick = found.pick || found.winner || found.predictedWinner || found.pred;
     if (pick) {
-        const p = String(pick).trim().toUpperCase();
-        if (p === "HOME") pick = r.home?.code;           // map to team code
-        else if (p === "AWAY") pick = r.away?.code;      // map to team code
-        r.model = { ...(r.model || {}), predictedWinner: norm(pick) };
+      const p = String(pick).trim().toUpperCase();
+      if (p === "HOME") pick = r.home?.code;           // map to team code
+      else if (p === "AWAY") pick = r.away?.code;      // map to team code
+      r.model = { ...(r.model || {}), predictedWinner: norm(pick) };
     }
 
     // 2) Normalize probability (accept strings, alternate field names)
     const phRaw =
-        found.pHome ?? found.p_home ?? found.homeProb ?? found.probHome ?? found.prob_home;
+      found.pHome ?? found.p_home ?? found.homeProb ?? found.probHome ?? found.prob_home;
     const ph = Number(phRaw);
     if (Number.isFinite(ph)) {
-        r.model = { ...(r.model || {}), pHome: ph };     // always store as Number
+      r.model = { ...(r.model || {}), pHome: ph };     // always store as Number
     }
-    }
+  }
 
   return rows;
 }
-// ---------------------------------------------------------------------------
 
-function verdictFromProbs(game, probs) {
-  if (!probs || !game) return null;
-
-  const pHome = Number(probs.pHome);
-  if (!Number.isFinite(pHome)) return null;
-
-  // Only show verdict once the game has a final score
-  const isFinal = (game?.status || '').toLowerCase().includes('final');
-  if (!isFinal) return null;
-
-  const homeCode = codeify(game?.home, null);
-  const awayCode = codeify(game?.away, null);
-  if (!homeCode || !awayCode) return null;
-
-  const predicted = pHome > 0.5 ? homeCode : awayCode;
-  const actual = getActualWinnerCode(game);
-  if (!actual || actual === 'TIE') return null;
-
-  const correct = actual === predicted;
-  const pct = Math.round(pHome * 100);
-  return {
-    state: correct ? 'correct' : 'incorrect',
-    tooltip: `Predicted ${predicted} (${pct}%), actual ${actual}`,
-  };
-}
-
-
-/* ========= Last-10 panel bits ========= */
-function Last10List({ title, loading, error, data }){
-  const record = React.useMemo(()=>{
-    const arr = data?.games || [];
-    let w=0,l=0,t=0;
-    arr.forEach(g => { if(g.result==='W') w++; else if(g.result==='L') l++; else t++; });
-    return arr.length ? `${w}-${l}${t?`-${t}`:''}` : null;
-  }, [data]);
-
-  return (
-    <Card variant="outlined" sx={{ borderRadius:1, flex:1, minWidth:0 }}>
-      <CardContent sx={{ p:2 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight:700, mb:1 }}>
-          {title}{record ? ` · ${record}` : ""}
-        </Typography>
-        <Divider sx={{ mb:1 }} />
-        {loading ? (
-          <Stack alignItems="center" sx={{ py:4 }}><CircularProgress size={20} /></Stack>
-        ) : error ? (
-          <Typography variant="body2" color="warning.main">{error}</Typography>
-        ) : !data?.games?.length ? (
-          <Typography variant="body2" sx={{ opacity:0.8 }}>No data.</Typography>
-        ) : (
-          <List dense sx={{ maxHeight: '45vh', overflow:'auto' }}>
-            {data.games.slice(0,10).map((g,i)=>(
-              <ListItem key={i} disableGutters>
-                <ListItemText
-                  primaryTypographyProps={{ variant:'body2', fontWeight:600 }}
-                  secondaryTypographyProps={{ variant:'caption' }}
-                  primary={`${g.date} — ${g.homeAway === 'Home' ? 'vs' : '@'} ${g.opp}`}
-                  secondary={`${g.result || '?'} ${g.score || ''}`}
-                />
-              </ListItem>
-            ))}
-          </List>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// --- Model helpers ----------------------------------------------------------
-function codeify(teamObjOrStr, fallback = '') {
-  if (!teamObjOrStr) return fallback;
-  if (typeof teamObjOrStr === 'string') return teamObjOrStr.toUpperCase();
-  return (teamObjOrStr.code || teamObjOrStr.abbr || teamObjOrStr.name || fallback).toUpperCase();
-}
-
-// Try to locate the model's predicted winner across a few common shapes.
-function getPredictedWinnerCode(game) {
-  // Prefer explicit winner strings/objects first
-  const homeCode = codeify(game?.home, null);
-  const awayCode = codeify(game?.away, null);
-
-  const stringPickCandidates = [
-    game?.model?.predictedWinner,
-    game?.model?.winner,
-    game?.prediction?.winner,
-    game?.prediction?.predictedWinner,
-    game?.predictedWinner,
-    game?.predictedWinnerCode,
-    game?.odds?.modelPick,
-  ];
-
-  for (const c of stringPickCandidates) {
-    if (!c) continue;
-    const raw = String(typeof c === "string" ? c : (c.code || c.abbr || c.name || "")).toUpperCase().trim();
-    if (raw === "HOME" && homeCode) return homeCode;
-    if (raw === "AWAY" && awayCode) return awayCode;
-    const code = codeify(raw, null);
-    if (code) return code; // e.g., "POR"
-  }
-
-  // Fallback: choose by probability when available (now numeric for sure)
-  const probCandidates = [
-    game?.model?.pHome,
-    game?.model?.probHome,
-    game?.prediction?.pHome,
-    game?.prediction?.homeWinProb,
-    game?.probabilities?.home,
-    game?.probabilities?.pHome,
-  ].map((v) => Number(v)).filter((v) => Number.isFinite(v));
-
-  if (probCandidates.length && homeCode && awayCode) {
-    const pHome = probCandidates[0];
-    return pHome > 0.5 ? homeCode : awayCode;
-  }
-
-  return null;
-}
-
-function seasonDateWindow(endYear){
-  const start = `${endYear-1}-10-01`;
-  const end   = `${endYear}-06-30`;
-  return { start, end };
-}
-
-function getActualWinnerCode(game) {
-  const home = codeify(game?.home, 'HOME');
-  const away = codeify(game?.away, 'AWAY');
-  const hs = Number(game?.homeScore ?? NaN);
-  const as = Number(game?.awayScore ?? NaN);
-  if (Number.isNaN(hs) || Number.isNaN(as)) return null;
-  if (hs === as) return 'TIE';
-  return hs > as ? home : away;
-}
-
-function modelVerdict(game) {
-  // Only evaluate when Final
-  const isFinal = (game?.status || '').toLowerCase().includes('final');
-  if (!isFinal) return null;
-
-  const actual = getActualWinnerCode(game);
-  const predicted = getPredictedWinnerCode(game);
-
-  // If we don't have both a result and a prediction, don't render anything.
-  if (!actual || !predicted || actual === 'TIE') return null;
-
-  const correct = actual === predicted;
-  return {
-    state: correct ? 'correct' : 'incorrect',
-    tooltip: `Predicted ${predicted}, actual ${actual}`,
-  };
-}
-
-function isoDaysAgo(n, from = new Date()){
-  const d = new Date(from); d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0,10);
-}
-function clampISODateOnly(iso){ return (iso || '').slice(0,10); }
-
-function lastCompletedSeasonEndYear(d = new Date()){
-  // NBA seasons end in June. If we're before July, last completed season ended last year.
-  const y = d.getFullYear();
-  const m = d.getMonth(); // 0=Jan
-  return (m >= 6) ? y : (y - 1);
-}
-
-function toISODateOnly(d) { return new Date(d).toISOString().slice(0,10); }
-function windowISO({ anchorISO, days }) {
-  const anchor = anchorISO || toISODateOnly(new Date());
-  const start  = isoDaysAgo(days, new Date(anchor));
-  return { start, end: anchor };
-}
-function lastCompletedSeasonEndYearAt(anchor = new Date()){
-  // season ends in June; if anchor is after June, last completed season ended this year, else last year
-  const y = anchor.getFullYear();
-  const m = anchor.getMonth(); // 0=Jan … 11=Dec
-  return (m >= 6) ? y : (y - 1);
-}
-
-function seasonWindowUpTo(anchorISO){
-  const d = new Date(anchorISO || new Date());
-  const endYear = (d.getMonth() >= 9) ? d.getFullYear() + 1 : d.getFullYear(); // season named by END year
-  const start = `${endYear - 1}-10-01`;
-  const end   = clampISODateOnly(anchorISO) || `${endYear}-06-30`;
-  return { start, end, endYear };
-}
-
-async function fetchTeamLast10UpToBDL(teamAbbr, anchorISO){
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-
-  const { start, end } = seasonWindowUpTo(anchorISO);
-
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start);
-  u.searchParams.set("end_date", end);
-  u.searchParams.set("postseason", "false");
-  u.searchParams.set("per_page", "100");
-
-  const headers = bdlHeaders();
-  let page = 1, all = [];
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const data = Array.isArray(j?.data) ? j.data : [];
-    all.push(...data);
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-
-  const finals = all
-    .filter(g => (g?.status || "").toLowerCase().includes("final"))
-    .filter(g => clampISODateOnly(g?.date) <= clampISODateOnly(end))
-    .sort((a,b)=> new Date(b.date) - new Date(a.date))
-    .slice(0, 10)
-    .map(g => {
-      const home = (g.home_team?.abbreviation || "HOME").toUpperCase();
-      const away = (g.visitor_team?.abbreviation || "AWAY").toUpperCase();
-      const isHome = home === teamAbbr;
-      const my     = isHome ? g.home_team_score : g.visitor_team_score;
-      const their  = isHome ? g.visitor_team_score : g.home_team_score;
-      const result = my > their ? "W" : (my < their ? "L" : "T");
-      const opp    = isHome ? away : home;
-      const score  = `${home} ${g.home_team_score} - ${away} ${g.visitor_team_score}`;
-      return {
-        date: clampISODateOnly(g.date),
-        opp,
-        homeAway: isHome ? "Home" : "Away",
-        result,
-        score
-      };
-    });
-
-  return { team: teamAbbr, games: finals, _source: `balldontlie:seasonTo(${end})` };
-}
-
-async function fetchTeamLast10FromSeasonBDL(teamAbbr, seasonEndYear){
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-  const { start, end } = seasonDateWindow(seasonEndYear);
-
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start);
-  u.searchParams.set("end_date", end);
-  u.searchParams.set("postseason", "false");
-  u.searchParams.set("per_page", "100");
-
-  const headers = bdlHeaders();
-  let page = 1, all = [];
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (r.status === 402 || r.status === 403) throw new Error("BDL paid tier required for date filters.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const data = Array.isArray(j?.data) ? j.data : [];
-    all.push(...data);
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-
-  const finals = all
-    .filter(g => (g?.status || "").toLowerCase().includes("final"))
-    .sort((a,b)=> new Date(b.date) - new Date(a.date))
-    .slice(0, 10)
-    .map(g => {
-      const home = (g.home_team?.abbreviation || "HOME").toUpperCase();
-      const away = (g.visitor_team?.abbreviation || "AWAY").toUpperCase();
-      const isHome = home === teamAbbr;
-      const my     = isHome ? g.home_team_score : g.visitor_team_score;
-      const their  = isHome ? g.visitor_team_score : g.home_team_score;
-      const result = my > their ? "W" : (my < their ? "L" : "T");
-      const opp    = isHome ? away : home;
-      const score  = `${home} ${g.home_team_score} - ${away} ${g.visitor_team_score}`;
-      return {
-        date: (g.date || "").slice(0,10),
-        opp,
-        homeAway: isHome ? "Home" : "Away",
-        result,
-        score
-      };
-    });
-
-  return { team: teamAbbr, games: finals, _source: `balldontlie:season(${start}→${end})` };
-}
-
-// ---------------------------------------------------------------------------
-async function fetchTeamSeasonPointDiffBDL(teamAbbr, seasonEndYear){
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-
-  const { start, end } = seasonDateWindow(seasonEndYear);
-
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start);
-  u.searchParams.set("end_date", end);
-  u.searchParams.set("postseason", "false");
-  u.searchParams.set("per_page", "100");
-
-  const headers = bdlHeaders();
-  let page = 1, gp = 0, sumMargin = 0;
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const data = Array.isArray(j?.data) ? j.data : [];
-
-    for (const g of data) {
-      const hs = g?.home_team_score;
-      const as = g?.visitor_team_score;
-      if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
-
-      const home = (g?.home_team?.abbreviation || "").toUpperCase();
-      const isHome = home === teamAbbr;
-      const my = isHome ? hs : as;
-      const opp = isHome ? as : hs;
-
-      gp += 1;
-      sumMargin += (my - opp); // positive if team outscored opp
-    }
-
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-
-  const diff = gp ? (sumMargin / gp) : 0; // average point differential
-  return { gp, diff };
-}
-
-async function fetchTinyPreseasonNudgeBDL(teamAbbr){
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) return 0;
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", isoDaysAgo(30));
-  u.searchParams.set("end_date", new Date().toISOString().slice(0,10));
-  u.searchParams.set("per_page", "100");
-
-  const headers = bdlHeaders();
-  const r = await fetch(u, { headers });
-  if (!r.ok) return 0;
-  const j = await r.json();
-  const data = Array.isArray(j?.data) ? j.data : [];
-
-  let gp = 0, sumMargin = 0;
-  for (const g of data) {
-    if (!/final/i.test(g?.status || "")) continue;
-    const hs = g?.home_team_score, as = g?.visitor_team_score;
-    if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
-    const home = (g?.home_team?.abbreviation || "").toUpperCase();
-    const isHome = home === teamAbbr;
-    const my = isHome ? hs : as;
-    const opp = isHome ? as : hs;
-    gp += 1; sumMargin += (my - opp);
-  }
-  if (!gp) return 0;
-  // tiny weight: convert to ~0.2 of its raw effect
-  return (sumMargin / gp) * 0.2;
-}
-
-function logistic(pAdv, scale = 6.5){ // scale ~ how many points ~= 75/25 swing
-  // p = 1 / (1 + e^(-pAdv/scale))
-  const z = Math.max(-50, Math.min(50, pAdv / scale));
-  return 1 / (1 + Math.exp(-z));
-}
-
-function seasonBoundsFor(anchorISO){
-  const d = new Date(anchorISO || new Date());
-  const y = d.getFullYear();
-  const m = d.getMonth(); // 0..11
-  const endYear = (m >= 9) ? y + 1 : y; // season named by END year
-  const start = new Date(`${endYear - 1}-10-01T00:00:00Z`);
-  const end   = new Date(`${endYear}-06-30T23:59:59Z`);
-  return { start, end, endYear };
-}
-function isWithinSeason(anchorISO){
-  const a = new Date(anchorISO || new Date());
-  const { start, end } = seasonBoundsFor(anchorISO);
-  return a >= start && a <= end;
-}
-
-async function computePriorEdgeBDL(homeCode, awayCode){
-  // Pick last completed season as prior
-  const today = new Date();
-  const seasonEndYear = (today.getMonth() >= 9) ? today.getFullYear() : today.getFullYear(); // before tip, last completed season ended this calendar year
-  const prevSeasonEnd = seasonEndYear; // e.g., before 2024-25 starts, prev end = 2024
-
-  const [homePrev, awayPrev] = await Promise.all([
-    fetchTeamSeasonPointDiffBDL(homeCode, prevSeasonEnd),
-    fetchTeamSeasonPointDiffBDL(awayCode, prevSeasonEnd),
-  ]);
-
-  // Home-court baseline (in points)
-  const HCA = 2.3; // conservative NBA HCA estimate
-
-  // Optional tiny preseason nudge
-  const [hPre, aPre] = await Promise.all([
-    fetchTinyPreseasonNudgeBDL(homeCode),
-    fetchTinyPreseasonNudgeBDL(awayCode),
-  ]);
-
-  // Point-advantage estimate: (home prior - away prior) + HCA + preseason deltas
-  const pointAdv = (homePrev.diff - awayPrev.diff) + HCA + (hPre - aPre);
-
-  const pHome = logistic(pointAdv, 6.5);
-
-  return {
-    pHome,
-    deltas: {
-      priorDiff: +(homePrev.diff - awayPrev.diff).toFixed(2),
-      hca: +HCA.toFixed(1),
-      preseason: +(hPre - aPre).toFixed(2),
-    },
-    sources: {
-      seasonEndYear: prevSeasonEnd,
-      homeGP: homePrev.gp,
-      awayGP: awayPrev.gp,
-    }
-  };
-}
-
-async function buildProbsForGameAsync({ game, awayData, homeData }) {
-  const gameDateISO =
-    (game?._iso || "").slice(0,10) || (game?.dateKey || "") || new Date().toISOString().slice(0,10);
-
-  const homeGames = homeData?.games || [];
-  const awayGames = awayData?.games || [];
-
-  // Always compute a PRIOR
-  const homeCode = game?.home?.code, awayCode = game?.away?.code;
-  const prior = (homeCode && awayCode) ? await computePriorEdgeBDL(homeCode, awayCode) : null;
-  const pPrior = prior?.pHome ?? 0.5;
-
-  // If we have recent games for BOTH teams, build a recent-form probability
-  let pRecent = null, recentInfo = null;
-  if (homeGames.length && awayGames.length) {
-    const homeSummary = summarizeLastNGames(homeGames, 10);
-    const awaySummary = summarizeLastNGames(awayGames, 10);
-    const homeRestDays = daysRestBefore(gameDateISO, homeGames);
-    const awayRestDays = daysRestBefore(gameDateISO, awayGames);
-    const homeB2B = isBackToBack(gameDateISO, homeGames);
-    const awayB2B = isBackToBack(gameDateISO, awayGames);
-
-    const P = computeGameProbabilities({
-      homeSummary, awaySummary,
-      homeRestDays, awayRestDays,
-      homeB2B, awayB2B,
-      neutralSite: false,
-    });
-    pRecent = P.pHome;
-    recentInfo = { P, homeGamesN: homeGames.length, awayGamesN: awayGames.length };
-  }
-
-  // BLENDING LOGIC
-  if (pRecent == null) {
-    // No recent window yet → prior only
-    return {
-      pHome: pPrior,
-      mode: "prior",
-      deltas: prior?.deltas || {},
-      factors: [
-        { label: "Last season diff (H−A)", value: `${prior?.deltas?.priorDiff?.toFixed?.(2) ?? 0} pts/g` },
-        { label: "Home-court", value: `${prior?.deltas?.hca ?? 2.3} pts` },
-        { label: "Preseason nudge", value: `${prior?.deltas?.preseason?.toFixed?.(2) ?? 0} pts` },
-      ],
-      provenance: `Prior-only (no current-season window yet). Based on last season point differential + home-court + tiny preseason weight.`,
-      confidence: 0.25, // low
-      gamesUsed: { recentHome: 0, recentAway: 0 }
-    };
-  }
-
-  // Compute how much **current-season** data we have and grow alpha with it
-  const nH = homeGames.filter(g => /W|L|T/.test(g.result)).length || homeGames.length;
-  const nA = awayGames.filter(g => /W|L|T/.test(g.result)).length || awayGames.length;
-  const nEff = Math.min(nH, nA);
-
-  // Example schedule:
-  // 0 games → 0.00, 1 → 0.25, 2 → 0.40, 3 → 0.55, 4 → 0.70, ≥5 → 0.80
-  const alpha = clamp01(
-    nEff >= 5 ? 0.80 :
-    nEff === 4 ? 0.70 :
-    nEff === 3 ? 0.55 :
-    nEff === 2 ? 0.40 :
-    nEff === 1 ? 0.25 : 0.00
-  );
-
-  // Blend on the logit scale for better calibration
-  const z = (1 - alpha) * logit(pPrior) + alpha * logit(pRecent);
-  const pBlend = ilogit(z);
-
-  return {
-    pHome: pBlend,
-    mode: alpha >= 0.8 ? "recent" : "blend",
-    deltas: recentInfo?.P?.deltas || prior?.deltas || {},
-    factors: recentInfo
-      ? explainFactors({ homeSummary: summarizeLastNGames(homeGames, 10),
-                         awaySummary: summarizeLastNGames(awayGames, 10),
-                         deltas: recentInfo.P.deltas })
-      : [
-          { label: "Last season diff (H−A)", value: `${prior?.deltas?.priorDiff?.toFixed?.(2) ?? 0} pts/g` },
-          { label: "Home-court", value: `${prior?.deltas?.hca ?? 2.3} pts` },
-          { label: "Preseason nudge", value: `${prior?.deltas?.preseason?.toFixed?.(2) ?? 0} pts` },
-        ],
-    provenance:
-      alpha === 0
-        ? `Prior-only (no current-season data).`
-        : `Blended: ${Math.round(alpha*100)}% recent form (last 21 days) + ${Math.round((1-alpha)*100)}% prior (last season + HCA + tiny preseason).`,
-    confidence: Math.max(0.25, alpha),              // expose as 0.25–0.8 in early going
-    gamesUsed: { recentHome: nH, recentAway: nA },  // handy for the UI
-  };
-}
-
-
-async function fetchTeamFormBDL(teamAbbr, {
-   days = 21, includePostseason = false, anchorISO = null
- } = {}) {
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-
-  const { start: start_date, end: end_date } = windowISO({ anchorISO, days });
-
-  // /v1/games supports team_ids[], start_date, end_date, postseason
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start_date);
-  u.searchParams.set("end_date", end_date);
-  u.searchParams.set("postseason", includePostseason ? "true" : "false");
-  u.searchParams.set("per_page", "100");
-
-  const headers = bdlHeaders();
-  let page = 1, all = [];
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (r.status === 402 || r.status === 403) throw new Error("BDL paid tier required for recent game window.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const data = Array.isArray(j?.data) ? j.data : [];
-    all.push(...data);
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-
-  // Convert to your { team, games:[{date,opp,homeAway,result,score}] } shape
-  const games = all
-    .filter(g => (g?.status || "").toLowerCase().includes("final"))
-    .sort((a,b)=> new Date(b.date) - new Date(a.date))
-    .slice(0, 10) // still last-10, but taken from the recent window
-    .map(g => {
-      const home = (g.home_team?.abbreviation || "HOME").toUpperCase();
-      const away = (g.visitor_team?.abbreviation || "AWAY").toUpperCase();
-      const isHome = home === teamAbbr;
-      const my     = isHome ? g.home_team_score : g.visitor_team_score;
-      const their  = isHome ? g.visitor_team_score : g.home_team_score;
-      const result = my > their ? "W" : (my < their ? "L" : "T");
-      const opp    = isHome ? away : home;
-      const score  = `${home} ${g.home_team_score} - ${away} ${g.visitor_team_score}`;
-      return {
-        date: clampISODateOnly(g.date),
-        opp, homeAway: isHome ? "Home" : "Away", result, score
-      };
-    });
-
-  return { team: teamAbbr, games, _source: `balldontlie:recent(${start_date}→${end_date})` };
-}
-
-async function fetchTeamLast10FromSeasonAtBDL(teamAbbr, anchorISO){
-  const endYear = lastCompletedSeasonEndYearAt(new Date(anchorISO));
-  return fetchTeamLast10FromSeasonBDL(teamAbbr, endYear);
-}
-
-async function fetchRecentPlayerAveragesBDL(teamAbbr, {
-   days = 21, seasonEndYear = 2025, anchorISO = null,
- } = {}) {
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-
-  const { start: start_date, end: end_date } = windowISO({ anchorISO, days });
-
-  // Pull recent box-score level rows, aggregated client-side by player_id.
-  // /v1/stats supports team_ids[], start_date, end_date, postseason=false
-  const u = new URL("https://api.balldontlie.io/v1/stats");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start_date);
-  u.searchParams.set("end_date", end_date);
-  u.searchParams.set("postseason", "false");
-  u.searchParams.set("per_page", "100");
-
-  const headers = bdlHeaders();
-  let page = 1, rows = [];
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (r.status === 402 || r.status === 403) throw new Error("BDL paid tier required for recent player stats.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const data = Array.isArray(j?.data) ? j.data : [];
-    rows.push(...data);
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-
-  // Aggregate per player_id
-  const byPlayer = new Map();
-  for (const s of rows) {
-    const pid = Number(s?.player?.id ?? s?.player_id);
-    if (!Number.isFinite(pid)) continue;
-    if (!byPlayer.has(pid)) {
-      byPlayer.set(pid, {
-        player_id: pid,
-        player: s.player || null,
-        gp: 0, min: 0, pts: 0, reb: 0, ast: 0,
-      });
-    }
-    const p = byPlayer.get(pid);
-    p.gp += 1;
-    // times are strings like "32:18"; approximate to minutes.float
-    p.min += parseMinToNumber(String(s?.min || s?.minutes || "0:00"));
-    p.pts += Number(s?.pts || 0);
-    p.reb += Number(s?.reb || 0);
-    p.ast += Number(s?.ast || 0);
-  }
-
-  // Convert to averages
-  const avgs = Array.from(byPlayer.values()).map(p => ({
-    player_id: p.player_id,
-    player: p.player,
-    // Keep min as "avg minutes per game" in mm:ss-like precision? we’ll keep float for ranking and present 1-decimal.
-    min: `${Math.floor((p.min / p.gp) || 0)}:${String(Math.round((((p.min / p.gp) % 1) * 60))||0).padStart(2,'0')}`,
-    pts: (p.pts / p.gp) || 0,
-    reb: (p.reb / p.gp) || 0,
-    ast: (p.ast / p.gp) || 0,
-  }));
-
-  // Rank by minutes (desc), then points
-  avgs.sort((a,b)=>{
-    const am = parseMinToNumber(a.min), bm = parseMinToNumber(b.min);
-    if (bm !== am) return bm - am;
-    return (b.pts||0) - (a.pts||0);
-  });
-
-  return { window: `${start_date}→${end_date}`, players: avgs };
-}
-
-/* ========= Fetch last-10 (existing) ========= */
-async function fetchLast10BDL(teamCode) {
-  const id = BDL_TEAM_ID[teamCode];
-  if (!id) throw new Error(`Unknown team code: ${teamCode}`);
-
-  const params = new URLSearchParams({
-    "team_ids[]": String(id),
-    "start_date": SEASON_START,
-    "end_date": SEASON_END,
-    "per_page": "100",
-  });
-
-  const url = `https://api.balldontlie.io/v1/games?${params.toString()}`;
-
-  const headers = {};
-  const key = process.env.REACT_APP_BDL_API_KEY;
-  if (key) headers["Authorization"] = key;
-
-  const res = await fetch(url, { headers });
-  if (res.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-  if (!res.ok) throw new Error(`BDL HTTP ${res.status}`);
-
-  const json = await res.json();
-  const data = Array.isArray(json?.data) ? json.data : [];
-
-  const finals = data
-    .filter(g => (g?.status || "").toLowerCase().includes("final"))
-    .filter(g => !g?.postseason)
-    .sort((a,b) => new Date(b.date) - new Date(a.date))
-    .slice(0, 10);
-
-  const games = finals.map(g => {
-    const home = (g.home_team?.abbreviation || "HOME").toUpperCase();
-    const away = (g.visitor_team?.abbreviation || "AWAY").toUpperCase();
-    const isHome = home === teamCode;
-    const my = isHome ? g.home_team_score : g.visitor_team_score;
-    const their = isHome ? g.visitor_team_score : g.home_team_score;
-    const result = my > their ? "W" : (my < their ? "L" : "T");
-    const opp = isHome ? away : home;
-    const score = `${home} ${g.home_team_score} - ${away} ${g.visitor_team_score}`;
-    return {
-      date: (g.date || "").slice(0,10),
-      opp,
-      homeAway: isHome ? "Home" : "Away",
-      result,
-      score
-    };
-  });
-
-  return { team: teamCode, games, _source: "balldontlie" };
-}
-
-/* ========= New: Month schedule from balldontlie ========= */
+/* ========= Month schedule from balldontlie ========= */
 function monthRange(year, month /* 0-11 */){
   const start = new Date(year, month, 1);
   const end   = new Date(year, month + 1, 0);
@@ -934,12 +179,15 @@ function monthRange(year, month /* 0-11 */){
   return { start: fmt(start), end: fmt(end) };
 }
 
+function bdlHeaders() {
+  const key = process.env.REACT_APP_BDL_API_KEY;
+  return key ? { Authorization: key } : {};
+}
+
 // Robust month fetch: follows meta.next_page and de-dupes by id
 async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
   const { start, end } = monthRange(year, month);
-  const headers = {};
-  const key = process.env.REACT_APP_BDL_API_KEY;
-  if (key) headers["Authorization"] = key;
+  const headers = bdlHeaders();
 
   const per_page = 100;
   let page = 1;
@@ -1006,328 +254,64 @@ async function fetchMonthScheduleBDL(year, month /* 0-11 */) {
   return rows;
 }
 
-// --- DROP-IN: small helpers reused below ---
-function bdlHeaders() {
-  const key = process.env.REACT_APP_BDL_API_KEY;
-  return key ? { Authorization: key } : {};
+/* ========= Minimal model helpers for verdict/score ========= */
+function codeify(teamObjOrStr, fallback = '') {
+  if (!teamObjOrStr) return fallback;
+  if (typeof teamObjOrStr === 'string') return teamObjOrStr.toUpperCase();
+  return (teamObjOrStr.code || teamObjOrStr.abbr || teamObjOrStr.name || fallback).toUpperCase();
 }
-function parseMinToNumber(minStr) {
-  // "34:12" -> 34.2 approx; very rough, ok for sorting
-  if (!minStr || typeof minStr !== "string") return 0;
-  const [m, s] = minStr.split(":").map(Number);
-  return (isFinite(m) ? m : 0) + (isFinite(s) ? s/60 : 0);
-}
+function getPredictedWinnerCode(game) {
+  const homeCode = codeify(game?.home, null);
+  const awayCode = codeify(game?.away, null);
 
-// --- DROP-IN: head-to-head this season (A vs B) ---
-async function fetchHeadToHeadBDL(teamA_abbr, teamB_abbr, {
-  start = SEASON_START, end = SEASON_END
-} = {}) {
-  const teamA_id = BDL_TEAM_ID[teamA_abbr];
-  if (!teamA_id) throw new Error(`Unknown team code: ${teamA_abbr}`);
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamA_id));
-  u.searchParams.set("start_date", start);
-  u.searchParams.set("end_date", end);
-  u.searchParams.set("per_page", "100");
+  const stringPickCandidates = [
+    game?.model?.predictedWinner,
+    game?.model?.winner,
+    game?.prediction?.winner,
+    game?.prediction?.predictedWinner,
+    game?.predictedWinner,
+    game?.predictedWinnerCode,
+    game?.odds?.modelPick,
+  ];
 
-  const headers = bdlHeaders();
-  let page = 1, all = [];
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const data = Array.isArray(j?.data) ? j.data : [];
-    all.push(...data);
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
+  for (const c of stringPickCandidates) {
+    if (!c) continue;
+    const raw = String(typeof c === "string" ? c : (c.code || c.abbr || c.name || "")).toUpperCase().trim();
+    if (raw === "HOME" && homeCode) return homeCode;
+    if (raw === "AWAY" && awayCode) return awayCode;
+    const code = codeify(raw, null);
+    if (code) return code; // e.g., "POR"
   }
 
-  // Keep only games where the opponent is B
-  const vs = all.filter(g => {
-    const h = (g?.home_team?.abbreviation || "").toUpperCase();
-    const v = (g?.visitor_team?.abbreviation || "").toUpperCase();
-    return h === teamB_abbr || v === teamB_abbr;
-  });
-
-  // Tally wins for A and B (finals only)
-  let aWins = 0, bWins = 0;
-  for (const g of vs) {
-    const hs = g?.home_team_score, as = g?.visitor_team_score;
-    if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
-    const homeAbbr = (g?.home_team?.abbreviation || "").toUpperCase();
-    const aIsHome = homeAbbr === teamA_abbr;
-    const aScore = aIsHome ? hs : as;
-    const bScore = aIsHome ? as : hs;
-    if (aScore > bScore) aWins++; else if (aScore < bScore) bWins++;
+  const pHome = Number(game?.model?.pHome);
+  if (Number.isFinite(pHome) && homeCode && awayCode) {
+    return pHome > 0.5 ? homeCode : awayCode;
   }
-  return { aWins, bWins, games: vs };
+
+  return null;
 }
-
-// --- DROP-IN: roster by team id (quick) ---
-async function fetchTeamRosterByTeamIdBDL(teamAbbr, { perPage = 100 } = {}) {
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-  const headers = bdlHeaders();
-  let page = 1, out = [];
-  const u = new URL("https://api.balldontlie.io/v1/players");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("per_page", String(perPage));
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const arr = Array.isArray(j?.data) ? j.data : [];
-    out.push(...arr);
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-  return out; // array of players with .id
+function getActualWinnerCode(game) {
+  const home = codeify(game?.home, 'HOME');
+  const away = codeify(game?.away, 'AWAY');
+  const hs = Number(game?.homeScore ?? NaN);
+  const as = Number(game?.awayScore ?? NaN);
+  if (Number.isNaN(hs) || Number.isNaN(as)) return null;
+  if (hs === as) return 'TIE';
+  return hs > as ? home : away;
 }
-
-// --- DROP-IN: season averages for many players at once ---
-async function fetchSeasonAveragesBatchBDL(playerIds, seasonEndYear = 2025) {
-  if (!playerIds?.length) return [];
-  // Batch request with multiple player_ids[]
-  const u = new URL("https://api.balldontlie.io/v1/season_averages");
-  u.searchParams.set("season", String(seasonEndYear));
-  for (const id of playerIds) u.searchParams.append("player_ids[]", String(id));
-  const r = await fetch(u, { headers: bdlHeaders() });
-  if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-  if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-  const j = await r.json();
-  return Array.isArray(j?.data) ? j.data : [];
-}
-
-function dateOnlyLabel(dateKey) {
-  if (!dateKey) return "TBD";
-  // Noon UTC to keep the same calendar date across US time zones
-  const d = new Date(`${dateKey}T12:00:00Z`);
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  }).format(d);
-}
-
-/* ========= Probability helpers for the drawer UI ========= */
-function buildProbsForGame({ game, awayData, homeData }) {
-  const gameDateISO =
-    (game?._iso || "").slice(0, 10) ||
-    (game?.dateKey || "") ||
-    new Date().toISOString().slice(0, 10);
-
-  const homeGames = homeData?.games || [];
-  const awayGames = awayData?.games || [];
-  if (!homeGames.length || !awayGames.length) return null;
-
-  const homeSummary = summarizeLastNGames(homeGames, 10);
-  const awaySummary = summarizeLastNGames(awayGames, 10);
-  const homeRestDays = daysRestBefore(gameDateISO, homeGames);
-  const awayRestDays = daysRestBefore(gameDateISO, awayGames);
-  const homeB2B = isBackToBack(gameDateISO, homeGames);
-  const awayB2B = isBackToBack(gameDateISO, awayGames);
-
-  const P = computeGameProbabilities({
-    homeSummary,
-    awaySummary,
-    homeRestDays,
-    awayRestDays,
-    homeB2B,
-    awayB2B,
-    neutralSite: false,
-  });
-
+function modelVerdict(game) {
+  const isFinal = (game?.status || '').toLowerCase().includes('final');
+  if (!isFinal) return null;
+  const actual = getActualWinnerCode(game);
+  const predicted = getPredictedWinnerCode(game);
+  if (!actual || !predicted || actual === 'TIE') return null;
   return {
-    ...P,
-    factors: explainFactors({ homeSummary, awaySummary, deltas: P.deltas }),
+    state: actual === predicted ? 'correct' : 'incorrect',
+    tooltip: `Predicted ${predicted}, actual ${actual}`,
   };
 }
 
-function ProbabilityCard({ probs, homeCode, awayCode, verdict }) {
-  if (!probs) return null;
-  const pct = Math.round(probs.pHome * 100);
-
-  return (
-    <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
-      <CardContent sx={{ p:2 }}>
-        {/* Header row: title on left, verdict chip on right */}
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
-          <Stack direction="row" alignItems="baseline" spacing={1}>
-            <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
-              Model edge
-            </Typography>
-            <Typography variant="caption" sx={{ opacity:0.7 }}>
-              (home win)
-            </Typography>
-            {probs?.mode && (
-              <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
-                {probs.mode === 'recent' ? 'recent form' :
-                probs.mode === 'prior'  ? 'prior model' :
-                                          'data unavailable'}
-              </Typography>
-            )}
-          </Stack>
-
-          {/* ✔ / ✖ only if we have a verdict */}
-          {verdict && (
-            verdict.state === 'correct' ? (
-              <Tooltip title={verdict.tooltip}>
-                <Chip
-                  size="small"
-                  color="success"
-                  variant="outlined"
-                  icon={<CheckCircleIcon fontSize="small" />}
-                  label="Correct"
-                />
-              </Tooltip>
-            ) : (
-              <Tooltip title={verdict.tooltip}>
-                <Chip
-                  size="small"
-                  color="error"
-                  variant="outlined"
-                  icon={<CancelIcon fontSize="small" />}
-                  label="Wrong"
-                />
-              </Tooltip>
-            )
-          )}
-        </Stack>
-
-        {typeof probs?.confidence === 'number' && (
-          <Chip
-            size="small"
-            variant="outlined"
-            sx={{ ml: 1 }}
-            label={`Confidence ${Math.round(probs.confidence*100)}%${probs?.gamesUsed ? ` · H${probs.gamesUsed.recentHome}/A${probs.gamesUsed.recentAway}` : ''}`}
-          />
-        )}
-
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
-          <Typography variant="h5" sx={{ fontWeight:800 }}>
-            {pct}%
-          </Typography>
-          <Typography variant="body2" sx={{ opacity:0.75 }}>
-            {homeCode} vs {awayCode}
-          </Typography>
-        </Stack>
-
-        <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
-          <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
-        </Box>
-
-        {probs.provenance && (
-          <Typography variant="caption" sx={{ display:'block', opacity:0.75, mt:1 }}>
-            {probs.provenance}
-          </Typography>
-        )}
-
-        <List dense sx={{ mt:1 }}>
-          {probs.factors.map((f, i) => (
-            <ListItem key={i} disableGutters sx={{ py:0.25 }}>
-              <ListItemText
-                primaryTypographyProps={{ variant:'body2' }}
-                primary={`${f.label}: ${f.value}`}
-              />
-            </ListItem>
-          ))}
-        </List>
-      </CardContent>
-    </Card>
-  );
-}
-
-// --- DROP-IN: single player stat "pill" ---
-function PlayerPill({ avg, accent = 'primary.main' }) {
-  const name = displayName(avg.player, avg.player_id);
-  const iv = initials(avg?.player?.first_name, avg?.player?.last_name);
-
-  return (
-    <Chip
-      avatar={
-        <Avatar
-          sx={{
-            width: 22,
-            height: 22,
-            fontSize: 12,
-            bgcolor: (t) => t.palette.action.hover,
-            color: (t) => t.palette.text.primary,
-            border: '2px solid',
-            borderColor: accent,
-          }}
-        >
-          {iv}
-        </Avatar>
-      }
-      label={
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: 'row',
-            alignItems: 'baseline',
-            gap: 1,
-            justifyContent: 'flex-start', // ⬅️ left-align the contents
-            textAlign: 'left',            // ⬅️ ensure text itself is left-aligned
-            width: '100%',                // ⬅️ stretch so justifyContent works
-          }}
-        >
-          <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1 }}>
-            {name}
-          </Typography>
-          <Typography
-            variant="caption"
-            sx={{
-              opacity: 0.9,
-              lineHeight: 1,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            }}
-          >
-            {nf1(avg.pts)} PTS · {nf1(avg.reb)} REB · {nf1(avg.ast)} AST
-          </Typography>
-        </Box>
-      }
-      sx={{
-        borderRadius: 999,
-        px: 0.5,
-        py: 0.25,
-        bgcolor: (t) => t.palette.action.selected,
-        '& .MuiChip-label': {
-          py: 0.5,
-          width: '100%', // ⬅️ let label fill full width of pill
-        },
-      }}
-      variant="filled"
-    />
-  );
-}
-
-// Fetch a single game by balldontlie game id
-async function fetchGameByIdBDL(gameId) {
-  if (!gameId) throw new Error("Missing game id");
-  const u = `https://api.balldontlie.io/v1/games/${gameId}`;
-  const r = await fetch(u, { headers: bdlHeaders() });
-  if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-  if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-  const j = await r.json();
-  const g = j || {};
-  return {
-    id: g.id,
-    status: g.status || "",
-    homeCode: (g.home_team?.abbreviation || "").toUpperCase(),
-    awayCode: (g.visitor_team?.abbreviation || "").toUpperCase(),
-    homeScore: Number.isFinite(g.home_team_score) ? g.home_team_score : null,
-    awayScore: Number.isFinite(g.visitor_team_score) ? g.visitor_team_score : null,
-    period: Number.isFinite(g.period) ? g.period : null,
-    time: g.time || "", // sometimes empty; we’ll guard
-  };
-}
-
-
-/* ========= Drawer ========= */
+/* ========= Drawer (slim, delegates to GameComparePanel) ========= */
 function ComparisonDrawer({ open, onClose, game }) {
   if (!open || !game) return null;
 
@@ -1375,7 +359,7 @@ function ComparisonDrawer({ open, onClose, game }) {
           Clicked game: {game?.away?.name} at {game?.home?.name}
         </Typography>
 
-        {/* 🔁 unified content */}
+        {/* unified content */}
         <GameComparePanel game={game} />
       </Box>
 
@@ -1399,11 +383,10 @@ function ComparisonDrawer({ open, onClose, game }) {
   );
 }
 
-// --- Replace the whole resultMeta with this version ---
+// --- Final label/score helper for GameCard ---
 function isFinal(game){
   return (game?.status || "").toLowerCase().includes("final");
 }
-
 function resultMeta(game){
   if (!isFinal(game)) return null;
 
@@ -1418,14 +401,8 @@ function resultMeta(game){
   const winnerPts  = homeWon ? hs   : as;
   const loserPts   = homeWon ? as   : hs;
 
-  // Keep a single-line label around for any legacy callers
   const label = `${away} ${as} – ${home} ${hs}`;
-
-  // New: stacked lines, winner first
-  const lines = [
-    `${winnerTeam} ${winnerPts}`,
-    `${loserTeam} ${loserPts}`,
-  ];
+  const lines = [`${winnerTeam} ${winnerPts}`, `${loserTeam} ${loserPts}`];
 
   return { label, lines, winner: winnerTeam, homeWon };
 }
@@ -1496,10 +473,8 @@ function GameCard({ game, onPick }) {
     (game?.status || "").toLowerCase()
   );
 
-  // Short status helper for live games (keeps chips compact)
   const liveStatusLabel = (() => {
     const s = String(game?.status || "");
-    // Common trims like "End of 3rd Qtr" -> "End Q3"
     const m = s.match(/end of\s*(\d)/i);
     if (m) return `End Q${m[1]}`;
     return s; // "In Progress", "Halftime", etc.
@@ -1516,7 +491,7 @@ function GameCard({ game, onPick }) {
       >
         <Stack
           direction="row"
-          alignItems="flex-start" // let text take 2 lines if needed
+          alignItems="flex-start"
           spacing={1}
           sx={{ width: "100%" }}
         >
@@ -1541,7 +516,7 @@ function GameCard({ game, onPick }) {
                 wordBreak: "break-word",
                 overflow: "hidden",
                 display: "-webkit-box",
-                WebkitLineClamp: 1, // title stays to 1 line
+                WebkitLineClamp: 1,
                 WebkitBoxOrient: "vertical",
               }}
             >
@@ -1565,10 +540,10 @@ function GameCard({ game, onPick }) {
               sx={{
                 opacity: 0.8,
                 wordBreak: "break-word",
-                whiteSpace: "normal", // allow wrapping
+                whiteSpace: "normal",
                 overflow: "hidden",
                 display: "-webkit-box",
-                WebkitLineClamp: 2, // clamp to 2 lines on mobile
+                WebkitLineClamp: 2,
                 WebkitBoxOrient: "vertical",
               }}
             >
@@ -1576,24 +551,16 @@ function GameCard({ game, onPick }) {
             </Typography>
           </Box>
 
-          {/* RIGHT CHIP(S) – don't let these shrink */}
+          {/* RIGHT CHIP(S) */}
           {final ? (
             <Stack
               direction="row"
               spacing={1}
               sx={{ flexShrink: 0, alignItems: "flex-start" }}
             >
-              {/* Final status */}
               <Chip size="small" color="success" label="Final" />
-
-              {/* Stacked score */}
               <Box
-                sx={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-end",
-                  lineHeight: 1.15,
-                }}
+                sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.15 }}
                 aria-label="Final score"
               >
                 <Typography variant="body2" sx={{ fontWeight: 700 }}>
@@ -1603,12 +570,9 @@ function GameCard({ game, onPick }) {
                   {final.lines[1]}
                 </Typography>
               </Box>
-
-              {/* Model verdict near the right edge */}
               {(() => {
                 const verdict = modelVerdict(game);
                 if (!verdict) return null;
-
                 return verdict.state === "correct" ? (
                   <Tooltip title={verdict.tooltip}>
                     <Chip
@@ -1635,24 +599,16 @@ function GameCard({ game, onPick }) {
               })()}
             </Stack>
           ) : isLive ? (
-            // LIVE: show live badge + current score; keep compact
-            <Stack
-              direction="row"
-              spacing={1}
-              sx={{ flexShrink: 0, alignItems: "center" }}
-            >
+            <Stack direction="row" spacing={1} sx={{ flexShrink: 0, alignItems: "center" }}>
               <Chip size="small" color="warning" label="Live" />
               <Chip
                 size="small"
                 variant="outlined"
-                label={`${game.home.code} ${
-                  game.homeScore ?? "–"
-                } — ${game.away.code} ${game.awayScore ?? "–"}`}
+                label={`${game.home.code} ${game.homeScore ?? "–"} — ${game.away.code} ${game.awayScore ?? "–"}`}
               />
               <Chip size="small" variant="outlined" label={liveStatusLabel} />
             </Stack>
           ) : (
-            // SCHEDULED: show ET if clock exists, otherwise a date label
             <Chip
               size="small"
               variant="outlined"
@@ -1751,7 +707,7 @@ export default function AllGamesCalendar(){
           console.log('[predictions]', {
             monthKey,
             rowsWithModel: rows.filter(r => r.model && (r.model.predictedWinner || Number.isFinite(r.model.pHome))).length
-          });          
+          });
         } catch { /* non-fatal if predictions service is down */ }
         if (cancelled) return;
 
@@ -1773,26 +729,24 @@ export default function AllGamesCalendar(){
     return ()=>{ cancelled=true; };
   }, [viewMonth, monthCache]);
 
-    // Group a month's rows by YYYY-MM-DD and sort within each day
-    function bucketByDayAll(games){
+  // Group a month's rows by YYYY-MM-DD and sort within each day
+  function bucketByDayAll(games){
     const m = new Map();
     for (const g of games || []) {
-        const k = g?.dateKey;
-        if (!k) continue;
-        if (!m.has(k)) m.set(k, []);
-        m.get(k).push(g);
+      const k = g?.dateKey;
+      if (!k) continue;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(g);
     }
-    // stable sort within a day by ISO (time if present), then by home name
     for (const arr of m.values()) {
-        arr.sort((a,b)=>
+      arr.sort((a,b)=>
         String(a._iso||"").localeCompare(String(b._iso||"")) ||
         String(a.home?.name||"").localeCompare(String(b.home?.name||""))
-        );
+      );
     }
     return m;
-    }
+  }
 
-  // month days & events (from the currently loaded month's rows)
   const monthDays = useMemo(()=> daysInMonth(viewMonth.getFullYear(), viewMonth.getMonth()), [viewMonth]);
   const eventsMap = useMemo(()=>{
     const y = viewMonth.getFullYear();
@@ -1819,44 +773,43 @@ export default function AllGamesCalendar(){
   function openCompare(game){ setCompareGame(game); setCompareOpen(true); }
 
   return (
-        <Box
-        sx={{
-            mx:'auto',
-            width:'100%',
-            maxWidth: 520,
-            px: { xs: 1, sm: 1.5 },   // 8px left/right on mobile, 12px on sm+
-            py: 1.5
-        }}
-        >
+    <Box
+      sx={{
+        mx:'auto',
+        width:'100%',
+        maxWidth: 520,
+        px: { xs: 1, sm: 1.5 },
+        py: 1.5
+      }}
+    >
       {/* top header (sticky) */}
       <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px:1.5 }}>
           <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth:0 }}>
             <Box sx={{ lineHeight: 1 }}>
-            <Typography
+              <Typography
                 variant="h6"
                 sx={{
-                fontFamily: '"Bebas Neue", sans-serif',
-                fontSize: { xs: 26, sm: 32 },
-                letterSpacing: 1,
-                fontWeight: 400
+                  fontFamily: '"Bebas Neue", sans-serif',
+                  fontSize: { xs: 26, sm: 32 },
+                  letterSpacing: 1,
+                  fontWeight: 400
                 }}
-            >
-                
-            </Typography>
-            <Typography
+              >
+              </Typography>
+              <Typography
                 variant="caption"
                 sx={{
-                opacity: 0.75,
-                display: 'block',
-                mt: -0.25,
-                maxWidth: 280,          // tweak as you like
-                whiteSpace: 'normal',   // allow wrapping
-                wordBreak: 'break-word' // break long words if needed
+                  opacity: 0.75,
+                  display: 'block',
+                  mt: -0.25,
+                  maxWidth: 280,
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word'
                 }}
-            >
+              >
                 NBA <SportsBasketballIcon fontSize="small" sx={{ verticalAlign: "middle" }} />
-            </Typography>
+              </Typography>
             </Box>
             <Divider orientation="vertical" flexItem sx={{ opacity:0.2 }} />
 
@@ -1882,10 +835,7 @@ export default function AllGamesCalendar(){
       {/* horizontal day strip */}
       <Box
         ref={stripRef}
-        sx={{
-          display:'flex', gap:1, overflowX:'auto', pb:1,
-          "&::-webkit-scrollbar": { display:'none' }
-        }}
+        sx={{ display:'flex', gap:1, overflowX:'auto', pb:1, "&::-webkit-scrollbar": { display:'none' } }}
       >
         {monthDays.map((d, idx)=>{
           const key = dateKeyFromDate(d);
@@ -1933,8 +883,9 @@ export default function AllGamesCalendar(){
 
       {/* comparison drawer */}
       <ComparisonDrawer open={compareOpen} onClose={()=> setCompareOpen(false)} game={compareGame} />
+
       {/* news below everything */}
-      <NbaNews />        
+      <NbaNews />
     </Box>
   );
 }
