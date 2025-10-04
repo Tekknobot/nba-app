@@ -7,6 +7,24 @@ import {
 
 const BDL_BASE = "/api/bdl";
 
+/* ---------------- helpers: sleep + retry w/ jitter ---------------- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function withRetry(fn, tries = 3, baseDelay = 120) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      // jittered backoff: 120ms, 240ms, 360ms (+/- random)
+      const delay = baseDelay * (i + 1) + Math.random() * 180;
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+}
+
+/* ---------------- date labels ---------------- */
 function safeDateLabel(iso, hasClock) {
   if (!iso) return "TBD";
   const d = new Date(iso);
@@ -14,29 +32,44 @@ function safeDateLabel(iso, hasClock) {
     return hasClock
       ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(d)
       : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(d);
-  } catch { return "TBD"; }
+  } catch {
+    return "TBD";
+  }
 }
 
 function calendarDateLabel(dateKey) {
-  // Force noon UTC on the date-only key so the day never shifts by timezone
+  // Force noon UTC so the day never shifts by timezone
   if (!dateKey) return "TBD";
   const d = new Date(`${dateKey}T12:00:00Z`);
   try {
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(d);
-  } catch { return "TBD"; }
+  } catch {
+    return "TBD";
+  }
 }
 
+/* ---------------- low-level fetchers with clearer errors ---------------- */
 async function bdl(url) {
   const r = await fetch(url, { cache: "no-store" });
   const ct = (r.headers.get("content-type") || "").toLowerCase();
   const text = await r.text();
-  if (!r.ok) throw new Error(`BDL ${r.status}: ${text.slice(0, 180)}`);
+  if (!r.ok) throw new Error(`BDL ${r.status}: ${text.slice(0, 220)}`);
   if (ct.includes("application/json")) return JSON.parse(text);
-  throw new Error(`BDL non-JSON response (${ct || "unknown"}). First bytes: ${text.slice(0, 120)}`);
+  throw new Error(`BDL non-JSON response (${ct || "unknown"}). First bytes: ${text.slice(0, 160)}`);
 }
 
+async function fetchJsonViaGateway(pathAndQs) {
+  const url = `${BDL_BASE}/${pathAndQs}`;
+  const r = await fetch(url, { cache: "no-store" });
+  const txt = await r.text();
+  if (!r.ok) throw new Error(`BDL ${r.status}: ${txt.slice(0, 220)}`);
+  const j = JSON.parse(txt);
+  return j?.data ?? j;
+}
+
+/* ---------------- game loader ---------------- */
 async function fetchGameById(id) {
-  const j = await bdl(`${BDL_BASE}/games/${id}`);
+  const j = await withRetry(() => bdl(`${BDL_BASE}/games/${id}`));
   const g = (j && (j.data || j)) || {};
   if (!g.home_team || !g.visitor_team) {
     throw new Error(`Game not found or unexpected response for id "${id}". Keys: ${Object.keys(j || {})}`);
@@ -60,33 +93,31 @@ async function fetchGameById(id) {
   };
 }
 
-// Derive NBA season window from an ISO (NBA seasons run Oct–Jun, named by END year)
+/* ---------------- season window ---------------- */
+// NBA seasons run Oct–Jun, named by END year.
 function seasonWindowFromISO(iso) {
   const d = iso ? new Date(iso) : new Date();
   const endYear = d.getMonth() >= 9 ? d.getFullYear() + 1 : d.getFullYear(); // Oct (9) → next year
   return { start: `${endYear - 1}-10-01`, end: `${endYear}-06-30`, endYear };
 }
 
-async function fetchJsonViaGateway(pathAndQs) {
-  const url = `${BDL_BASE}/${pathAndQs}`;
-  const r = await fetch(url, { cache: "no-store" });
-  const txt = await r.text();
-  if (!r.ok) throw new Error(`BDL ${r.status}: ${txt.slice(0,180)}`);
-  const j = JSON.parse(txt);
-  return j?.data ?? j;
-}
+/* ---------------- lookups that power notes (made resilient) ---------------- */
+// Minimal map (extend if you want all teams)
+const BDL_TEAM_ID = { ATL:1,BOS:2,BKN:3,CHA:4,CHI:5,CLE:6,DAL:7,DEN:8,DET:9,GSW:10,HOU:11,IND:12,LAC:13,LAL:14,MEM:15,MIA:16,MIL:17,MIN:18,NOP:19,NYK:20,OKC:21,ORL:22,PHI:23,PHX:24,POR:25,SAC:26,SAS:27,TOR:28,UTA:29,WAS:30 };
+function homeCodeToId(code){ const id = BDL_TEAM_ID[(code||"").toUpperCase()]; if (!id) throw new Error(`Unknown team code: ${code}`); return String(id); }
 
 // Head-to-head this season (wins for HOME vs AWAY)
 async function fetchHeadToHead(homeCode, awayCode, dateISO) {
   const { start, end } = seasonWindowFromISO(dateISO);
-  // Pull all HOME games this season and filter opponent == AWAY
   const qs = new URLSearchParams({
     "team_ids[]": homeCodeToId(homeCode),
     start_date: start,
     end_date: end,
     per_page: "100",
   }).toString();
-  const data = await fetchJsonViaGateway(`games?${qs}`);
+
+  // Soft-fail to empty list so UI shows “First meeting …” instead of “unavailable”
+  const data = await withRetry(() => fetchJsonViaGateway(`games?${qs}`)).catch(() => []);
 
   let homeWins = 0, awayWins = 0;
   for (const g of data || []) {
@@ -104,22 +135,19 @@ async function fetchHeadToHead(homeCode, awayCode, dateISO) {
   return { homeWins, awayWins };
 }
 
-// Minimal map (extend if you want all teams)
-const BDL_TEAM_ID = { ATL:1,BOS:2,BKN:3,CHA:4,CHI:5,CLE:6,DAL:7,DEN:8,DET:9,GSW:10,HOU:11,IND:12,LAC:13,LAL:14,MEM:15,MIA:16,MIL:17,MIN:18,NOP:19,NYK:20,OKC:21,ORL:22,PHI:23,PHX:24,POR:25,SAC:26,SAS:27,TOR:28,UTA:29,WAS:30 };
-function homeCodeToId(code){ const id = BDL_TEAM_ID[(code||"").toUpperCase()]; if (!id) throw new Error(`Unknown team code: ${code}`); return String(id); }
-
-// Roster → player ids (for season_averages), then compute leaders
+// Roster → player ids → season_averages (fallback to 21-day stats)
 async function fetchTeamLeaders(teamCode, dateISO) {
   const { endYear } = seasonWindowFromISO(dateISO);
+
   const rosterQs = new URLSearchParams({ "team_ids[]": homeCodeToId(teamCode), per_page: "100" }).toString();
-  const roster = await fetchJsonViaGateway(`players?${rosterQs}`);
+  const roster = await withRetry(() => fetchJsonViaGateway(`players?${rosterQs}`)).catch(() => null);
   const ids = Array.from(new Set((roster || []).map(p => p?.id).filter(Number))).slice(0, 30);
   if (!ids.length) return null;
 
   // Try season averages first
   const saQs = new URLSearchParams({ season: String(endYear) });
   ids.forEach(id => saQs.append("player_ids[]", String(id)));
-  let avgs = await fetchJsonViaGateway(`season_averages?${saQs.toString()}`).catch(()=>null);
+  let avgs = await withRetry(() => fetchJsonViaGateway(`season_averages?${saQs.toString()}`)).catch(() => null);
 
   // Fallback: recent 21-day stats -> compute per-game
   if (!Array.isArray(avgs) || avgs.length === 0) {
@@ -135,7 +163,7 @@ async function fetchTeamLeaders(teamCode, dateISO) {
       per_page: "100"
     }).toString();
 
-    const stats = await fetchJsonViaGateway(`stats?${statsQs}`).catch(()=>[]);
+    const stats = await withRetry(() => fetchJsonViaGateway(`stats?${statsQs}`)).catch(() => []);
     const byId = new Map();
     for (const s of stats || []) {
       const pid = s?.player?.id;
@@ -184,13 +212,15 @@ async function fetchLast10Record(teamCode, dateISO) {
     postseason: "false",
     per_page: "100"
   }).toString();
-  const data = await fetchJsonViaGateway(`games?${qs}`).catch(()=>[]);
+
+  const data = await withRetry(() => fetchJsonViaGateway(`games?${qs}`)).catch(() => []);
   // keep finals up to anchor date, newest first
   const finals = (data||[])
     .filter(g => /final/i.test(g?.status||""))
     .filter(g => (g?.date||"").slice(0,10) <= (dateISO||"").slice(0,10))
     .sort((a,b)=> new Date(b.date)-new Date(a.date))
     .slice(0, 10);
+
   let w=0,l=0,t=0;
   for (const g of finals) {
     const homeAbbr = (g.home_team?.abbreviation||"").toUpperCase();
@@ -203,70 +233,78 @@ async function fetchLast10Record(teamCode, dateISO) {
   return `${w}-${l}${t?`-${t}`:""}`;
 }
 
+/* ---------------- component ---------------- */
 export default function GamePage() {
   const { id } = useParams();
   const [game, setGame] = useState(null);
   const [err, setErr] = useState(null);
 
-const [h2h, setH2h] = useState(null);
-const [leadersHome, setLeadersHome] = useState(null);
-const [leadersAway, setLeadersAway] = useState(null);
-const [notesTried, setNotesTried] = useState({ h2h: false, leaders: false });
-const [formHome, setFormHome] = useState(null);
-const [formAway, setFormAway] = useState(null);
+  const [h2h, setH2h] = useState(null);
+  const [leadersHome, setLeadersHome] = useState(null);
+  const [leadersAway, setLeadersAway] = useState(null);
+  const [notesTried, setNotesTried] = useState({ h2h: false, leaders: false });
+  const [formHome, setFormHome] = useState(null);
+  const [formAway, setFormAway] = useState(null);
 
-// 1) Load the game when :id changes
-useEffect(() => {
-  let ok = true;
-  (async () => {
-    try {
-      const g = await fetchGameById(id);
-      if (!ok) return;
-      setGame(g);
-      setErr(null);
-    } catch (e) {
-      if (!ok) return;
-      setErr(e?.message || String(e));
-      setGame(null);
+  // 1) Load the game when :id changes
+  useEffect(() => {
+    let ok = true;
+    (async () => {
+      try {
+        const g = await fetchGameById(id);
+        if (!ok) return;
+        setGame(g);
+        setErr(null);
+      } catch (e) {
+        if (!ok) return;
+        setErr(e?.message || String(e));
+        setGame(null);
+      }
+    })();
+    return () => { ok = false; };
+  }, [id]);
+
+  // 2) When game is present, load Preview Notes (stagger + retry + soft fallbacks)
+  useEffect(() => {
+    if (!game) return;
+    let ok = true;
+    (async () => {
+      try {
+        const [hh, lh, la, fh, fa] = await Promise.all([
+          withRetry(() => fetchHeadToHead(game.home.code, game.away.code, game.dateISO))
+            .catch(() => ({ homeWins: 0, awayWins: 0 })),  // soft fallback
+          sleep(60).then(() =>
+            withRetry(() => fetchTeamLeaders(game.home.code, game.dateISO)).catch(() => null)
+          ),
+          sleep(120).then(() =>
+            withRetry(() => fetchTeamLeaders(game.away.code, game.dateISO)).catch(() => null)
+          ),
+          sleep(180).then(() =>
+            withRetry(() => fetchLast10Record(game.home.code, game.dateISO)).catch(() => "0-0")
+          ),
+          sleep(240).then(() =>
+            withRetry(() => fetchLast10Record(game.away.code, game.dateISO)).catch(() => "0-0")
+          ),
+        ]);
+        if (!ok) return;
+        setH2h(hh);
+        setLeadersHome(lh);
+        setLeadersAway(la);
+        setFormHome(fh);
+        setFormAway(fa);
+      } finally {
+        if (ok) setNotesTried({ h2h: true, leaders: true });
+      }
+    })();
+    return () => { ok = false; };
+  }, [game]);
+
+  // 3) AdSense push (optional)
+  useEffect(() => {
+    if (window.adsbygoogle && document.querySelector(".adsbygoogle")) {
+      try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch {}
     }
-  })();
-  return () => { ok = false; };
-}, [id]);
-
-// 2) When game is present, load Preview Notes (H2H + leaders)
-//    This runs on both past and future games; it's safe to keep as-is.
-useEffect(() => {
-  if (!game) return;              // guard: only after game loaded
-  let ok = true;
-  (async () => {
-    try {
-      const [hh, lh, la, fh, fa] = await Promise.all([
-        fetchHeadToHead(game.home.code, game.away.code, game.dateISO).catch(() => null),
-        fetchTeamLeaders(game.home.code, game.dateISO).catch(() => null),
-        fetchTeamLeaders(game.away.code, game.dateISO).catch(() => null),
-        fetchLast10Record(game.home.code, game.dateISO).catch(() => null),
-        fetchLast10Record(game.away.code, game.dateISO).catch(() => null),        
-      ]);
-      if (!ok) return;
-      setH2h(hh);
-      setLeadersHome(lh);
-      setLeadersAway(la);
-      setFormHome(fh);
-      setFormAway(fa);      
-    } finally {
-      if (ok) setNotesTried({ h2h: true, leaders: true });
-    }
-  })();
-  return () => { ok = false; };
-}, [game]);
-
-// 3) AdSense push (optional)
-useEffect(() => {
-  if (window.adsbygoogle && document.querySelector(".adsbygoogle")) {
-    try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch {}
-  }
-}, [game]);
-
+  }, [game]);
 
   if (err) {
     return (
@@ -339,110 +377,109 @@ useEffect(() => {
         </CardContent>
       </Card>
 
-    {/* Preview notes */}
-    <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
-    <CardContent sx={{ p: 2 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
-        Preview notes
-        </Typography>
+      {/* Preview notes */}
+      <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
+        <CardContent sx={{ p: 2 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
+            Preview notes
+          </Typography>
 
-        {/* Head-to-head */}
-        {h2h ? (
-        (h2h.homeWins === 0 && h2h.awayWins === 0)
-            ? (
-            <Typography variant="body2" sx={{ mb: 1 }}>
-                First meeting between {game.away.code} and {game.home.code} this season.
+          {/* Head-to-head */}
+          {h2h ? (
+            (h2h.homeWins === 0 && h2h.awayWins === 0)
+              ? (
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  First meeting between {game.away.code} and {game.home.code} this season.
+                </Typography>
+              ) : (
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  Season series so far: {game.home.code} {h2h.homeWins}–{h2h.awayWins} {game.away.code}.
+                </Typography>
+              )
+          ) : notesTried.h2h ? (
+            <Typography variant="body2" sx={{ mb: 1, opacity: 0.8 }}>
+              No season series info right now.
             </Typography>
+          ) : (
+            <Typography variant="body2" sx={{ mb: 1, opacity: 0.7 }}>
+              Loading season series…
+            </Typography>
+          )}
+
+          {isFinal && h2h && (
+            <Typography variant="caption" sx={{ display:'block', mt: 0.25, mb: 1, opacity: 0.8 }}>
+              After this result, the season series is {game.home.code} {h2h.homeWins}–{h2h.awayWins} {game.away.code}.
+            </Typography>
+          )}
+
+          {/* Recent form */}
+          {formHome && formAway && (
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Recent form (last 10): {game.home.code} {formHome}, {game.away.code} {formAway}.
+            </Typography>
+          )}
+
+          {/* Impact players */}
+          <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+            Impact players (season averages)
+          </Typography>
+          <List dense sx={{ mt: 0 }}>
+            {/* Home leaders */}
+            {leadersHome ? (
+              <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText
+                  primaryTypographyProps={{ variant: "body2" }}
+                  primary={
+                    <>
+                      <strong>{game.home.name}</strong>{": "}
+                      {leadersHome.points?.name ? `${leadersHome.points.name} ${leadersHome.points.v.toFixed(1)} PPG` : "—"}
+                      {" · "}
+                      {leadersHome.rebounds?.name ? `${leadersHome.rebounds.name} ${leadersHome.rebounds.v.toFixed(1)} RPG` : "—"}
+                      {" · "}
+                      {leadersHome.assists?.name ? `${leadersHome.assists.name} ${leadersHome.assists.v.toFixed(1)} APG` : "—"}
+                    </>
+                  }
+                />
+              </ListItem>
+            ) : notesTried.leaders ? (
+              <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Leaders temporarily unavailable." />
+              </ListItem>
             ) : (
-            <Typography variant="body2" sx={{ mb: 1 }}>
-                Season series so far: {game.home.code} {h2h.homeWins}–{h2h.awayWins} {game.away.code}.
-            </Typography>
-            )
-        ) : notesTried.h2h ? (
-        <Typography variant="body2" sx={{ mb: 1, opacity: 0.8 }}>
-            Season series data unavailable.
-        </Typography>
-        ) : (
-        <Typography variant="body2" sx={{ mb: 1, opacity: 0.7 }}>
-            Loading season series…
-        </Typography>
-        )}
+              <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Home leaders loading…" />
+              </ListItem>
+            )}
 
-        {isFinal && h2h && (
-        <Typography variant="caption" sx={{ display:'block', mt: 0.25, mb: 1, opacity: 0.8 }}>
-            After this result, the season series is {game.home.code} {h2h.homeWins}–{h2h.awayWins} {game.away.code}.
-        </Typography>
-        )}
-
-        {/* ⬇️ Add recent form right here */}
-        {formHome && formAway && (
-        <Typography variant="body2" sx={{ mb: 1 }}>
-            Recent form (last 10): {game.home.code} {formHome}, {game.away.code} {formAway}.
-        </Typography>
-        )}        
-
-        {/* Impact players */}
-        <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
-        Impact players (season averages)
-        </Typography>
-        <List dense sx={{ mt: 0 }}>
-            
-        {/* Home leaders */}
-        {leadersHome ? (
-            <ListItem disableGutters sx={{ py: 0.25 }}>
-            <ListItemText
-                primaryTypographyProps={{ variant: "body2" }}
-                primary={
-                <>
-                    <strong>{game.home.name}</strong>{": "}
-                    {leadersHome.points?.name ? `${leadersHome.points.name} ${leadersHome.points.v.toFixed(1)} PPG` : "—"}
-                    {" · "}
-                    {leadersHome.rebounds?.name ? `${leadersHome.rebounds.name} ${leadersHome.rebounds.v.toFixed(1)} RPG` : "—"}
-                    {" · "}
-                    {leadersHome.assists?.name ? `${leadersHome.assists.name} ${leadersHome.assists.v.toFixed(1)} APG` : "—"}
-                </>
-                }
-            />
-            </ListItem>
-        ) : notesTried.leaders ? (
-            <ListItem disableGutters sx={{ py: 0.25 }}>
-            <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Leaders unavailable." />
-            </ListItem>
-        ) : (
-            <ListItem disableGutters sx={{ py: 0.25 }}>
-            <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Home leaders loading…" />
-            </ListItem>
-        )}
-
-        {/* Away leaders */}
-        {leadersAway ? (
-            <ListItem disableGutters sx={{ py: 0.25 }}>
-            <ListItemText
-                primaryTypographyProps={{ variant: "body2" }}
-                primary={
-                <>
-                    <strong>{game.away.name}</strong>{": "}
-                    {leadersAway.points?.name ? `${leadersAway.points.name} ${leadersAway.points.v.toFixed(1)} PPG` : "—"}
-                    {" · "}
-                    {leadersAway.rebounds?.name ? `${leadersAway.rebounds.name} ${leadersAway.rebounds.v.toFixed(1)} RPG` : "—"}
-                    {" · "}
-                    {leadersAway.assists?.name ? `${leadersAway.assists.name} ${leadersAway.assists.v.toFixed(1)} APG` : "—"}
-                </>
-                }
-            />
-            </ListItem>
-        ) : notesTried.leaders ? (
-            <ListItem disableGutters sx={{ py: 0.25 }}>
-            <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Leaders unavailable." />
-            </ListItem>
-        ) : (
-            <ListItem disableGutters sx={{ py: 0.25 }}>
-            <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Away leaders loading…" />
-            </ListItem>
-        )}
-        </List>
-    </CardContent>
-    </Card>
+            {/* Away leaders */}
+            {leadersAway ? (
+              <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText
+                  primaryTypographyProps={{ variant: "body2" }}
+                  primary={
+                    <>
+                      <strong>{game.away.name}</strong>{": "}
+                      {leadersAway.points?.name ? `${leadersAway.points.name} ${leadersAway.points.v.toFixed(1)} PPG` : "—"}
+                      {" · "}
+                      {leadersAway.rebounds?.name ? `${leadersAway.rebounds.name} ${leadersAway.rebounds.v.toFixed(1)} RPG` : "—"}
+                      {" · "}
+                      {leadersAway.assists?.name ? `${leadersAway.assists.name} ${leadersAway.assists.v.toFixed(1)} APG` : "—"}
+                    </>
+                  }
+                />
+              </ListItem>
+            ) : notesTried.leaders ? (
+              <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Leaders temporarily unavailable." />
+              </ListItem>
+            ) : (
+              <ListItem disableGutters sx={{ py: 0.25 }}>
+                <ListItemText primaryTypographyProps={{ variant: "body2" }} primary="Away leaders loading…" />
+              </ListItem>
+            )}
+          </List>
+        </CardContent>
+      </Card>
 
       {/* Quick facts */}
       <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
