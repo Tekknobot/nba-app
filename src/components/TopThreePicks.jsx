@@ -9,109 +9,127 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 
+// --- Small helpers mirroring your AllGamesCalendar logic ---
 function isFinal(game){ return (game?.status || "").toLowerCase().includes("final"); }
 function isLive(game){ return /in progress|halftime|end of|quarter|q\d/i.test((game?.status || "").toLowerCase()); }
-
-function pickSide(game) {
+function codeify(t){ if(!t) return ""; if(typeof t==="string") return t.toUpperCase(); return (t.code||t.abbr||t.name||"").toUpperCase(); }
+function actualWinnerCode(game){
+  const hs = Number(game?.homeScore ?? NaN);
+  const as = Number(game?.awayScore ?? NaN);
+  if (!Number.isFinite(hs) || !Number.isFinite(as) || hs===as) return null;
+  return (hs>as ? codeify(game.home) : codeify(game.away)) || null;
+}
+function predictedWinnerCode(game){
+  // prefer numeric prob when present
   const ph = Number(game?.model?.pHome);
-  if (Number.isFinite(ph)) return ph >= 0.5 ? "home" : "away";
-  const code = String(game?.model?.predictedWinner || "").toUpperCase();
-  if (code && [game.home?.code, game.away?.code].includes(code)) {
-    return code === game.home.code ? "home" : "away";
+  if (Number.isFinite(ph)) return ph >= 0.5 ? codeify(game.home) : codeify(game.away);
+
+  // otherwise try strings in a few common places
+  const cands = [
+    game?.model?.predictedWinner, game?.model?.winner,
+    game?.predictedWinner, game?.prediction?.predictedWinner, game?.odds?.modelPick
+  ];
+  for (const c of cands){
+    if (!c) continue;
+    const raw = String(typeof c === "string" ? c : (c.code||c.abbr||c.name||"")).toUpperCase().trim();
+    if (raw==="HOME") return codeify(game.home);
+    if (raw==="AWAY") return codeify(game.away);
+    const code = codeify(raw);
+    if (code) return code;
   }
   return null;
 }
-function pickConfidence(game) {
+function favoredPct(game){
   const ph = Number(game?.model?.pHome);
   if (!Number.isFinite(ph)) return null;
-  // measure from coin-flip
-  return Math.abs(ph - 0.5); // 0..0.5
+  return Math.round((ph >= 0.5 ? ph : 1 - ph) * 100); // 50..100
 }
-function pct(v){ return Math.round(v * 100); }
-
-function shareLine({ g, side, confPct }) {
-  const fav = side === "home" ? g.home : g.away;
-  return `${g.away.code} @ ${g.home.code} — Pick: ${fav.code} ${confPct}%`;
+function confidenceDistance(game){
+  const ph = Number(game?.model?.pHome);
+  return Number.isFinite(ph) ? Math.abs(ph - 0.5) : null; // 0..0.5 or null
+}
+function shareLine({ g, pickCode, pct }){
+  return `${g.away.code} @ ${g.home.code} — Pick: ${pickCode}${pct!=null ? ` ${pct}%` : ""}`;
 }
 
-export default function TopThreePicks({ games = [] }) {
-  const picks = useMemo(() => {
-    const candidates = (games || [])
-      // prefer not to include finished games
-      .filter(g => !isFinal(g))
-      // must have a pick signal
-      .map(g => {
-        const side = pickSide(g);
-        const conf = pickConfidence(g);
-        if (!side || conf == null) return null;
+export default function TopThreePicks({ games = [] }){
+  const picks = useMemo(()=>{
+    const rows = (games||[])
+      .map(g=>{
+        const pickCode = predictedWinnerCode(g);
+        if (!pickCode) return null; // no signal at all
 
-        const favored = side === "home" ? g.home : g.away;
-        const favoredPct = side === "home" ? Number(g?.model?.pHome) : (1 - Number(g?.model?.pHome));
+        const pct = favoredPct(g);                // null if unknown
+        const conf = confidenceDistance(g) ?? -1; // sort key; unknowns go last
+
+        const live = isLive(g);
+        const final = isFinal(g);
+        const actual = final ? actualWinnerCode(g) : null;
+        const correct = final && actual ? (actual === pickCode) : null;
 
         return {
           key: `${g.dateKey}|${g.away.code}@${g.home.code}`,
           g,
-          side,
-          conf,                 // 0..0.5
-          confPct: pct(Math.min(1, Math.max(0, favoredPct))),
           title: `${g.away.code} @ ${g.home.code}`,
-          favored,
-          favoredPct,
-          live: isLive(g),
+          pickCode,
+          pct, conf, live, final, correct,
         };
       })
       .filter(Boolean);
 
-    // Sort by confidence desc, then live games first (optional), then earliest tip if available
-    candidates.sort((a, b) => {
-      const byConf = b.conf - a.conf;
-      if (byConf !== 0) return byConf;
-      if (a.live !== b.live) return a.live ? -1 : 1;
-      return String(a.g._iso || "").localeCompare(String(b.g._iso || ""));
+    // Sort:
+    // 1) has numeric confidence first, by conf desc
+    // 2) live next
+    // 3) then finals, then scheduled (optional tweak)
+    // 4) earliest tip
+    rows.sort((a,b)=>{
+      const aHas = a.conf>=0, bHas = b.conf>=0;
+      if (aHas!==bHas) return aHas ? -1 : 1;
+      if (aHas && bHas){
+        const byConf = b.conf - a.conf;
+        if (byConf) return byConf;
+      }
+      if (a.live!==b.live) return a.live ? -1 : 1;
+      if (a.final!==b.final) return a.final ? -1 : 1;
+      return String(a.g._iso||"").localeCompare(String(b.g._iso||""));
     });
 
-    return candidates.slice(0, 3);
+    return rows.slice(0,3);
   }, [games]);
 
   if (!picks.length) return null;
 
-  async function copy(text) {
-    try { await navigator.clipboard.writeText(text); } catch {}
-  }
+  const doCopy = async (text)=>{ try{ await navigator.clipboard.writeText(text); }catch{} };
 
   return (
-    <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
-      <CardContent sx={{ p: 2 }}>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+    <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
+      <CardContent sx={{ p:2 }}>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb:1 }}>
           <EmojiEventsIcon fontSize="small" />
-          <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Top 3 Picks</Typography>
-          <Chip size="small" variant="outlined" label="Model" sx={{ ml: "auto" }} />
+          <Typography variant="subtitle1" sx={{ fontWeight:700 }}>Top 3 Picks</Typography>
+          <Chip size="small" variant="outlined" label="Model" sx={{ ml:'auto' }} />
         </Stack>
 
         <Stack spacing={1.25}>
-          {picks.map((p, idx) => {
-            const { g } = p;
-            const line = shareLine(p);
-            const statusIcon = isFinal(g)
-              ? (g.homeScore > g.awayScore ? (g.home.code === p.favored.code ? <CheckCircleIcon fontSize="small" color="success" /> : <CancelIcon fontSize="small" color="error" />)
-                : (g.away.code === p.favored.code ? <CheckCircleIcon fontSize="small" color="success" /> : <CancelIcon fontSize="small" color="error" />))
+          {picks.map((p, idx)=>{
+            const share = shareLine({ g:p.g, pickCode:p.pickCode, pct:p.pct });
+            const statusIcon = p.final
+              ? (p.correct
+                  ? <CheckCircleIcon fontSize="small" color="success" />
+                  : <CancelIcon fontSize="small" color="error" />)
               : null;
 
             return (
               <Box key={p.key}>
-                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ gap: 1 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    {idx + 1}. {p.title}
+                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ gap:1 }}>
+                  <Typography variant="body2" sx={{ fontWeight:700 }}>
+                    {idx+1}. {p.title}
                   </Typography>
                   <Stack direction="row" spacing={0.5} alignItems="center">
                     {p.live && <Chip size="small" color="warning" label="Live" />}
-                    <Chip
-                      size="small"
-                      color="secondary"
-                      label={`${p.favored.code} · ${p.confPct}%`}
-                    />
+                    <Chip size="small" color="secondary" label={`${p.pickCode}${p.pct!=null ? ` · ${p.pct}%` : ""}`} />
                     <Tooltip title="Copy summary">
-                      <IconButton size="small" onClick={() => copy(line)}>
+                      <IconButton size="small" onClick={()=>doCopy(share)}>
                         <ContentCopyIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -119,21 +137,25 @@ export default function TopThreePicks({ games = [] }) {
                   </Stack>
                 </Stack>
 
-                <LinearProgress
-                  variant="determinate"
-                  value={p.favoredPct * 100}
-                  sx={{ height: 8, borderRadius: 1, mt: 0.5 }}
-                />
-                <Typography variant="caption" sx={{ opacity: 0.75 }}>
-                  Favored: {p.favored.name} (~{p.confPct}%)
-                </Typography>
+                {p.pct!=null ? (
+                  <>
+                    <LinearProgress variant="determinate" value={p.pct} sx={{ height:8, borderRadius:1, mt:0.5 }} />
+                    <Typography variant="caption" sx={{ opacity:0.75 }}>
+                      Confidence ~{p.pct}% toward {p.pickCode}
+                    </Typography>
+                  </>
+                ) : (
+                  <Typography variant="caption" sx={{ opacity:0.65, display:'block', mt:0.5 }}>
+                    Confidence unavailable — showing model pick only.
+                  </Typography>
+                )}
               </Box>
             );
           })}
         </Stack>
 
-        <Typography variant="caption" sx={{ opacity: 0.7, display: "block", mt: 1.25 }}>
-          Based on model edge (probabilities). For fun display only.
+        <Typography variant="caption" sx={{ opacity:0.7, display:'block', mt:1.25 }}>
+          Uses model probabilities when available; otherwise shows the model’s pick without a percentage.
         </Typography>
       </CardContent>
     </Card>
