@@ -690,9 +690,6 @@ export default function AllGamesCalendar(){
       {/* drawer */}
       <ComparisonDrawer open={compareOpen} onClose={()=> setCompareOpen(false)} game={compareGame} />
 
-      {/* City Court Series */}
-      <CityCourtOfTheDay />
-
       {/* news */}
       <NbaNews />
     </Box>
