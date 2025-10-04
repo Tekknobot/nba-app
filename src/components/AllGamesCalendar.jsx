@@ -565,6 +565,20 @@ export default function AllGamesCalendar(){
         </Stack>
       </Box>
 
+      {/* 👇 Intro/Explainer card goes here */}
+      <Card variant="outlined" sx={{ borderRadius: 1, mb: 2 }}>
+        <CardContent sx={{ p: 2 }}>
+          <Typography component="h1" variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
+            NBA Calendar & Matchup Helper
+          </Typography>
+          <Typography variant="body2" sx={{ opacity: 0.9 }}>
+            Browse the month’s NBA schedule, open any matchup to see recent form, a simple
+            home-win estimate (“Model edge”), and quick facts. Select a team to filter their
+            games; use the arrows to switch months.
+          </Typography>
+        </CardContent>
+      </Card>
+
       {/* day strip */}
       <Box ref={stripRef} sx={{ display:'flex', gap:1, overflowX:'auto', pb:1, "&::-webkit-scrollbar": { display:'none' } }}>
         {monthDays.map((d, idx)=>{
