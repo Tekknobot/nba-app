@@ -288,11 +288,12 @@ function resultMeta(game){
 }
 
 function GameCard({ game, onPick }) {
-  const vsLabel = `${game.away.code} @ ${game.home.code}`;
-  const sub = `${game.away.name} at ${game.home.name}`;
   const final = resultMeta(game);
   const isLive = /in progress|halftime|end of|quarter|q\d/i.test((game?.status || "").toLowerCase());
+  const titleCodes = `${game.away.code} @ ${game.home.code}`;
+  const subLine = `${game.away.name} at ${game.home.name}`;
 
+  // Short live status like "End Q3"
   const liveStatusLabel = (() => {
     const s = String(game?.status || "");
     const m = s.match(/end of\s*(\d)/i);
@@ -300,74 +301,154 @@ function GameCard({ game, onPick }) {
     return s;
   })();
 
+  // Small animated dot for "Live"
+  const LiveDot = (
+    <Box
+      sx={{
+        width: 8, height: 8, borderRadius: '50%',
+        bgcolor: 'warning.main',
+        '@keyframes pulse': { '0%': { transform:'scale(1)' }, '50%': { transform:'scale(1.4)' }, '100%': { transform:'scale(1)' } },
+        animation: 'pulse 1.3s ease-in-out infinite'
+      }}
+    />
+  );
+
+  // trailing status cluster (right side)
+  const RightStatus = final ? (
+    <Stack direction="column" spacing={0.25} sx={{ alignItems: 'flex-end', flexShrink: 0 }}>
+      <Chip size="small" color="success" label="Final" sx={{ height: 22 }} />
+      <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+        {final.lines[0]}
+      </Typography>
+      <Typography variant="body2" sx={{ opacity: 0.9, lineHeight: 1.1 }}>
+        {final.lines[1]}
+      </Typography>
+      {(() => {
+        const v = modelVerdict(game);
+        if (!v) return null;
+        return v.state === "correct" ? (
+          <Tooltip title={v.tooltip}>
+            <Chip size="small" color="success" variant="outlined" icon={<CheckCircleIcon fontSize="small" />} label="Model" sx={{ mt: 0.25 }} />
+          </Tooltip>
+        ) : (
+          <Tooltip title={v.tooltip}>
+            <Chip size="small" color="error" variant="outlined" icon={<CancelIcon fontSize="small" />} label="Model" sx={{ mt: 0.25 }} />
+          </Tooltip>
+        );
+      })()}
+    </Stack>
+  ) : isLive ? (
+    <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
+      {LiveDot}
+      <Chip size="small" color="warning" label="Live" sx={{ height: 22 }} />
+      <Chip
+        size="small"
+        variant="outlined"
+        label={`${game.home.code} ${game.homeScore ?? "–"} — ${game.away.code} ${game.awayScore ?? "–"}`}
+        sx={{ height: 22, display: { xs: 'none', sm: 'inline-flex' } }}
+      />
+      <Chip size="small" variant="outlined" label={liveStatusLabel} sx={{ height: 22 }} />
+    </Stack>
+  ) : (
+    <Chip
+      size="small"
+      variant="outlined"
+      sx={{ flexShrink: 0, height: 22 }}
+      label={
+        game?.hasClock
+          ? formatGameLabel(game._iso, { mode: "ET", withTZ: true })
+          : new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" })
+              .format(new Date(`${game.dateKey}T12:00:00Z`))
+      }
+    />
+  );
+
   return (
     <Card variant="outlined" sx={{ borderRadius: 1 }}>
-      <ListItemButton onClick={onPick} sx={{ borderRadius:1, "&:hover": { bgcolor: "rgba(25,118,210,0.06)" } }}>
-        <Stack direction="row" alignItems="flex-start" spacing={1} sx={{ width: "100%" }}>
-          <Avatar sx={{ width:30, height:30, fontSize:12, bgcolor:"primary.main", color:"primary.contrastText" }}>
+      <ListItemButton
+        onClick={onPick}
+        sx={{
+          borderRadius: 1,
+          px: 1,
+          py: 1,
+          minHeight: 64,                 // comfy tap target
+          "&:hover": { bgcolor: "action.hover" },
+        }}
+      >
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ width: "100%" }}>
+          {/* Compact home badge */}
+          <Avatar
+            sx={{
+              width: 34, height: 34, fontSize: 12,
+              bgcolor: "primary.main",
+              color: "primary.contrastText",
+              flexShrink: 0,
+            }}
+            aria-label={`Home team ${game.home.code}`}
+          >
             {game.home.code}
           </Avatar>
 
-          <Box sx={{ flex:"1 1 auto", minWidth:0 }}>
-            <Typography variant="body2" sx={{ fontWeight:700, wordBreak:"break-word", overflow:"hidden", display:"-webkit-box", WebkitLineClamp:1, WebkitBoxOrient:"vertical" }}>
+          {/* Main text block */}
+          <Box sx={{ flex: "1 1 auto", minWidth: 0 }}>
+            {/* Top line: codes or bolded winner on final */}
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: 700,
+                display: "block",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              aria-label={`${game.away.code} at ${game.home.code}`}
+            >
               {final ? (
                 <>
-                  <span style={{ fontWeight: final.homeWon ? 800 : 600 }}>{game.home.code}</span>
-                  {" vs "}
-                  <span style={{ fontWeight: !final.homeWon ? 800 : 600 }}>{game.away.code}</span>
+                  <Box component="span" sx={{ fontWeight: final.homeWon ? 800 : 600 }}>{game.home.code}</Box>
+                  <Box component="span" sx={{ mx: 0.5, opacity: 0.7 }}>vs</Box>
+                  <Box component="span" sx={{ fontWeight: !final.homeWon ? 800 : 600 }}>{game.away.code}</Box>
                 </>
-              ) : vsLabel}
+              ) : (
+                titleCodes
+              )}
             </Typography>
-            <Typography variant="caption" sx={{ opacity:0.8, wordBreak:"break-word", whiteSpace:"normal", overflow:"hidden", display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical" }}>
-              {sub}
+
+            {/* Second line: long names (2-line clamp) */}
+            <Typography
+              variant="caption"
+              sx={{
+                opacity: 0.8,
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+                whiteSpace: "normal",
+              }}
+              aria-label={subLine}
+            >
+              {subLine}
             </Typography>
+
+            {/* Third line (only on mobile, when live) — compact score */}
+            {isLive && (
+              <Typography
+                variant="caption"
+                sx={{ mt: 0.25, display: { xs: 'block', sm: 'none' }, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
+              >
+                {`${game.home.code} ${game.homeScore ?? "–"} — ${game.away.code} ${game.awayScore ?? "–"} · ${liveStatusLabel}`}
+              </Typography>
+            )}
           </Box>
 
-          {final ? (
-            <Stack direction="row" spacing={1} sx={{ flexShrink:0, alignItems:"flex-start" }}>
-              <Chip size="small" color="success" label="Final" />
-              <Box sx={{ display:"flex", flexDirection:"column", alignItems:"flex-end", lineHeight:1.15 }} aria-label="Final score">
-                <Typography variant="body2" sx={{ fontWeight:700 }}>{final.lines[0]}</Typography>
-                <Typography variant="body2" sx={{ opacity:0.9 }}>{final.lines[1]}</Typography>
-              </Box>
-              {(() => {
-                const v = modelVerdict(game);
-                if (!v) return null;
-                return v.state === "correct"
-                  ? <Tooltip title={v.tooltip}><Chip size="small" color="success" variant="outlined" icon={<CheckCircleIcon fontSize="small" />} label="Model" sx={{ ml:0.5 }} /></Tooltip>
-                  : <Tooltip title={v.tooltip}><Chip size="small" color="error" variant="outlined" icon={<CancelIcon fontSize="small" />} label="Model" sx={{ ml:0.5 }} /></Tooltip>;
-              })()}
-            </Stack>
-          ) : isLive ? (
-            <Stack direction="row" spacing={1} sx={{ flexShrink:0, alignItems:"center" }}>
-              <Chip size="small" color="warning" label="Live" />
-              <Chip size="small" variant="outlined" label={`${game.home.code} ${game.homeScore ?? "–"} — ${game.away.code} ${game.awayScore ?? "–"}`} />
-              <Chip size="small" variant="outlined" label={liveStatusLabel} />
-            </Stack>
-          ) : (
-            <Chip size="small" variant="outlined" sx={{ flexShrink:0, maxWidth:"50vw", alignSelf:"center" }}
-              label={game?.hasClock
-                ? formatGameLabel(game._iso, { mode:"ET", withTZ:true })
-                : new Intl.DateTimeFormat(undefined, { weekday:"short", month:"short", day:"numeric" }).format(new Date(`${game.dateKey}T12:00:00Z`))
-              }
-            />
-          )}
-        </Stack>
-
-        <Stack direction="row" alignItems="center" justifyContent="center" sx={{ mt:0.5, pl:2 }}>
-          <Link component={RouterLink} to={`/game/${game.id}`} underline="hover" color="primary"
-            sx={{ fontSize:12, fontWeight:600, display:"inline-flex", alignItems:"center", gap:0.5, px:1, py:0.25, borderRadius:1, transition:"background-color 120ms ease",
-              "&:hover": { bgcolor:"action.hover" },
-              "&:focus-visible": { outline:"2px solid", outlineColor:"primary.main", outlineOffset:2, borderRadius:4 },
-            }}
-          >
-            <ArrowRightAltIcon sx={{ fontSize: 14, ml: 0.25 }} />
-          </Link>
+          {/* Right-side status cluster */}
+          {RightStatus}
         </Stack>
       </ListItemButton>
     </Card>
   );
 }
+
 
 /* ========= Main Mobile Calendar ========= */
 export default function AllGamesCalendar(){
