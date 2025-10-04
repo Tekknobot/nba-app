@@ -70,8 +70,9 @@ function seasonWindowFromISO(iso) {
 async function fetchJsonViaGateway(pathAndQs) {
   const url = `${BDL_BASE}/${pathAndQs}`;
   const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error(`BDL ${r.status}`);
-  const j = await r.json();
+  const txt = await r.text();
+  if (!r.ok) throw new Error(`BDL ${r.status}: ${txt.slice(0,180)}`);
+  const j = JSON.parse(txt);
   return j?.data ?? j;
 }
 
