@@ -864,8 +864,8 @@ export default function GameComparePanel({ game }) {
         try {
         setMini({ loading: true, error: null, data: null });
         const [awayPack, homePack] = await Promise.all([
-            fetchRecentPlayerAveragesBDL(game.away.code, { days: 21, anchorISO }),
-            fetchRecentPlayerAveragesBDL(game.home.code, { days: 21, anchorISO }),
+            fetchRecentPlayerAveragesBDL(game.away.code, { days: 21, anchorISO, topN: 3 }),
+            fetchRecentPlayerAveragesBDL(game.home.code, { days: 21, anchorISO, topN: 3 }),
         ]);
         if (cancelled) return;
 
