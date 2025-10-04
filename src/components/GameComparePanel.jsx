@@ -9,6 +9,18 @@ import { Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 
+// Explain *why* there is no current-season data at the selected anchor date
+function noDataReason(anchorISO) {
+  const { start, end } = seasonWindowUpTo(anchorISO);
+  const a = new Date(`${anchorISO}T12:00:00Z`);
+  const startDt = new Date(`${start}T00:00:00Z`);
+  const endDt   = new Date(`${end}T23:59:59Z`);
+
+  if (a < startDt) return `Regular season hasn’t started as of ${anchorISO}.`;
+  if (a > endDt)   return `Regular season is over as of ${anchorISO}.`;
+  return `No completed regular-season games for one or both teams up to ${anchorISO}.`;
+}
+
 /* ====================== small utils ====================== */
 const nf1 = (v) => (v ?? 0).toFixed(1);
 const clampISODateOnly = (iso) => (iso || "").slice(0, 10);
@@ -400,7 +412,8 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
     />
   );
 }
-function Last10List({ title, loading, error, data }){
+
+function Last10List({ title, loading, error, data, note }){
   const record = useMemo(()=>{
     const arr = data?.games || [];
     let w=0,l=0,t=0;
@@ -420,7 +433,16 @@ function Last10List({ title, loading, error, data }){
         ) : error ? (
           <Typography variant="body2" color="warning.main">{error}</Typography>
         ) : !data?.games?.length ? (
-          <Typography variant="body2" sx={{ opacity:0.8 }}>No data.</Typography>
+          <Stack spacing={0.5}>
+            <Typography variant="body2" sx={{ color: 'info.main' }}>
+              No data available.
+            </Typography>
+            {note && (
+              <Typography variant="caption" sx={{ color: 'info.main' }}>
+                {note}
+              </Typography>
+            )}
+          </Stack>
         ) : (
           <List dense sx={{ maxHeight: '45vh', overflow:'auto' }}>
             {data.games.slice(0,10).map((g,i)=>(
@@ -462,7 +484,7 @@ function panelVerdict(game, edge){
   };
 }
 
-function ProbabilityCard({ game, edge }) {
+function ProbabilityCard({ game, edge, anchorISO }) {
   const verdict = panelVerdict(game, edge);
 
   const pModel = Number(game?.model?.pHome);
@@ -473,14 +495,32 @@ function ProbabilityCard({ game, edge }) {
   const hasProb = Number.isFinite(pHome);
   const pct = hasProb ? Math.round(pHome * 100) : null;
 
-  if (!hasProb && !verdict) return null;
-
   const homeCode = game?.home?.code;
   const awayCode = game?.away?.code;
 
-  const modeHint = hasModelProb
-    ? "model prob"
-    : (edge?.mode || "recent");
+  const modeHint = hasModelProb ? "model prob" : (edge?.mode || "recent");
+
+  // If neither model nor edge can render a probability, return a small info card
+  if (!hasProb) {
+    const reason = noDataReason(anchorISO);
+    return (
+      <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
+        <CardContent sx={{ p:2 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight:700, mb:0.5 }}>
+            Model edge
+          </Typography>
+          <Typography variant="body2" sx={{ color:'info.main' }}>
+            Unavailable — {reason}
+          </Typography>
+          {verdict && (
+            <Typography variant="caption" sx={{ display:'block', mt:0.5, color:'info.main' }}>
+              (Verdict available after finals; we’ll show whether the pick matched the result.)
+            </Typography>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
@@ -490,14 +530,8 @@ function ProbabilityCard({ game, edge }) {
             <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
               Model edge
             </Typography>
-            {hasProb && (
-              <Typography variant="caption" sx={{ opacity:0.7 }}>
-                (home win)
-              </Typography>
-            )}
-            <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
-              {modeHint}
-            </Typography>
+            <Typography variant="caption" sx={{ opacity:0.7 }}>(home win)</Typography>
+            <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>{modeHint}</Typography>
             {Number.isFinite(edge?.confidence) && (
               <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
                 conf ~{Math.round(edge.confidence*100)}%
@@ -520,23 +554,15 @@ function ProbabilityCard({ game, edge }) {
           )}
         </Stack>
 
-        {hasProb ? (
-          <>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
-              <Typography variant="h5" sx={{ fontWeight:800 }}>{pct}%</Typography>
-              <Typography variant="body2" sx={{ opacity:0.75 }}>
-                {homeCode} vs {awayCode}
-              </Typography>
-            </Stack>
-            <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
-              <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
-            </Box>
-          </>
-        ) : (
-          <Typography variant="body2" sx={{ mt:1, opacity:0.85 }}>
-            Model pick: <strong>{getPredictedWinnerCode(game) || '—'}</strong>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
+          <Typography variant="h5" sx={{ fontWeight:800 }}>{pct}%</Typography>
+          <Typography variant="body2" sx={{ opacity:0.75 }}>
+            {homeCode} vs {awayCode}
           </Typography>
-        )}
+        </Stack>
+        <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
+          <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
+        </Box>
 
         {(edge?.factors?.length) ? (
           <List dense sx={{ mt:1 }}>
@@ -641,6 +667,11 @@ export default function GameComparePanel({ game }) {
 
   const gameForVerdict = hydrated || game;
 
+  // Add these derived flags right after your effects / before the return:
+  const awayEmpty = !a.loading && !a.error && !(a.data?.games?.length);
+  const homeEmpty = !b.loading && !b.error && !(b.data?.games?.length);
+  const noDataNote = (awayEmpty || homeEmpty) ? noDataReason(anchorISO) : null;
+
   // last-10 (this season up to anchor)
   useEffect(()=>{ let cancelled=false; (async()=>{
     if (!game?.home?.code || !game?.away?.code) return;
@@ -717,6 +748,12 @@ export default function GameComparePanel({ game }) {
 
       <Divider sx={{ my: 1 }} />
 
+      {noDataNote && (
+      <Typography variant="caption" sx={{ color:'info.main', mb: 0.5, display:'block' }}>
+          {noDataNote}
+      </Typography>
+      )}
+
       {/* Recent form lists */}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
         <Last10List title={`${game?.away?.code} (${game?.away?.name})`} loading={a.loading} error={a.error} data={a.data} />
@@ -728,22 +765,26 @@ export default function GameComparePanel({ game }) {
       </Typography>
 
       {/* Probability (model/edge) */}
-      <ProbabilityCard game={gameForVerdict} edge={edge} />
+      <ProbabilityCard game={gameForVerdict} edge={edge} anchorISO={anchorISO} />
 
-      {/* H2H */}
-      {h2h.loading ? (
+        {/* H2H */}
+        {h2h.loading ? (
         <Typography variant="caption" sx={{ opacity:0.7, mt:1, display:'block' }}>
-          Loading season series…
+            Loading season series…
         </Typography>
-      ) : h2h.error ? (
+        ) : h2h.error ? (
         <Typography variant="caption" color="warning.main" sx={{ mt:1, display:'block' }}>
-          H2H error: {h2h.error}
+            H2H error: {h2h.error}
         </Typography>
-      ) : h2h.data ? (
+        ) : h2h.data ? (
         <Typography variant="body2" sx={{ mt:1 }}>
-          Season series: <strong>{game?.home?.code} {h2h.data.aWins}–{h2h.data.bWins} {game?.away?.code}</strong>
+            Season series: <strong>{game?.home?.code} {h2h.data.aWins}–{h2h.data.bWins} {game?.away?.code}</strong>
         </Typography>
-      ) : null}
+        ) : (
+        <Typography variant="caption" sx={{ color:'info.main', mt:1, display:'block' }}>
+            No head-to-head meetings between these teams so far this season.
+        </Typography>
+        )}
 
       {/* Top players */}
       <Accordion sx={{ mt:1.5 }} disableGutters>
