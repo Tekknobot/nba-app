@@ -6,6 +6,8 @@ import {
 } from "@mui/material";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import useMediaQuery from "@mui/material/useMediaQuery";
+import { useTheme } from "@mui/material/styles";
 
 /* ---------------- small date helpers ---------------- */
 function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
@@ -48,16 +50,7 @@ const TEAM_CODE = {
   "Sacramento Kings":"SAC","San Antonio Spurs":"SAS","Toronto Raptors":"TOR","Utah Jazz":"UTA","Washington Wizards":"WAS"
 };
 
-/* ---------------- transform JSON → team-scoped events ----------------
-   Expected JSON shape in /public/all-games-subject-to-change.json:
-   {
-     "season": "2025-2026",
-     "regular_season_games": [
-       { "date": "2025-10-21", "home": "Los Angeles Lakers", "away": "Golden State Warriors" },
-       ...
-     ]
-   }
------------------------------------------------------------------------ */
+/* ---------------- transform JSON → team-scoped events ---------------- */
 function buildEventsFromSchedule(json){
   const rows = [];
   const games = json?.regular_season_games || [];
@@ -94,8 +87,16 @@ function buildEventsFromSchedule(json){
 
 /* ---------------- drawer ---------------- */
 function DayDrawer({ open, onClose, date, items }){
+  const theme = useTheme();
+  const isXs = useMediaQuery(theme.breakpoints.down('sm')); // stack content on phones
+
   return (
-    <Drawer anchor="bottom" open={open} onClose={onClose} PaperProps={{ sx:{ borderTopLeftRadius:1, borderTopRightRadius:1 } }}>
+    <Drawer
+      anchor="bottom"
+      open={open}
+      onClose={onClose}
+      PaperProps={{ sx:{ borderTopLeftRadius:1, borderTopRightRadius:1 } }}
+    >
       <Box sx={{ p:2 }}>
         <Typography variant="subtitle1" sx={{ fontWeight:700, mb:1 }}>
           {date?.toLocaleDateString(undefined,{ weekday:'long', month:'short', day:'numeric' })}
@@ -103,16 +104,21 @@ function DayDrawer({ open, onClose, date, items }){
         <Divider sx={{ mb:1 }} />
         <List dense>
           {(items||[]).map((ev,i)=>(
-            <ListItem key={i} disableGutters secondaryAction={<Chip size="small" label={ev.et || 'TBD'} variant="outlined" />}>
-              <Box sx={{ display:'flex', alignItems:'center', gap:1 }}>
-                <Box sx={{ width:6, height:6, borderRadius:1, bgcolor:stageDotColor(ev.seasonStageId) }} />
-                <ListItemText
-                  primaryTypographyProps={{ variant:'body2', fontWeight:600 }}
-                  secondaryTypographyProps={{ variant:'caption' }}
-                  primary={`${ev.homeAway==='Away'?'@':'vs'} ${ev.opp}`}
-                  secondary={ev._teamName}
-                />
-              </Box>
+            <ListItem key={i} disableGutters>
+              <ListItemText
+                primaryTypographyProps={{ variant:'body2', fontWeight:600 }}
+                secondaryTypographyProps={{ variant:'caption' }}
+                primary={
+                  <Stack direction={isXs ? "column" : "row"} spacing={isXs ? 0.5 : 1} alignItems={isXs ? "flex-start" : "center"}>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Box sx={{ width:6, height:6, borderRadius:1, bgcolor:stageDotColor(ev.seasonStageId) }} />
+                      <span>{`${ev.homeAway==='Away'?'@':'vs'} ${ev.opp}`}</span>
+                    </Stack>
+                    <Chip size="small" label={ev.et || 'TBD'} variant="outlined" />
+                  </Stack>
+                }
+                secondary={ev._teamName}
+              />
             </ListItem>
           ))}
         </List>
@@ -124,13 +130,18 @@ function DayDrawer({ open, onClose, date, items }){
 
 /* ---------------- square day cell ---------------- */
 function SquareDay({ d, list, inMonth, today, onClick }) {
+  const theme = useTheme();
+  const isXs = useMediaQuery(theme.breakpoints.down('sm'));
+  const visibleChips = isXs ? 1 : 2;
+
   return (
     <Box sx={{ position: 'relative', width: '100%', aspectRatio: '1 / 1' }}>
       <Box
         onClick={onClick}
         sx={{
           position: 'absolute', inset: 0,
-          borderRadius: 1, p: 1, border: '1px solid',
+          borderRadius: 1, p: { xs: 0.75, sm: 1 },
+          border: '1px solid',
           borderColor: today ? 'primary.main' : 'divider',
           bgcolor: inMonth ? (today ? 'action.hover' : 'background.paper') : 'action.selected',
           opacity: inMonth ? 1 : 0.55,
@@ -138,15 +149,35 @@ function SquareDay({ d, list, inMonth, today, onClick }) {
           display: 'flex', flexDirection: 'column', overflow: 'hidden'
         }}
       >
-        <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1 }}>
+        <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1, fontSize: { xs: 12, sm: 14 } }}>
           {d.getDate()}
         </Typography>
         {list.length > 0 && (
           <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-            {list.slice(0, 2).map((ev, i) => (
-              <Chip key={i} size="small" label={`${ev.homeAway === 'Away' ? '@' : 'vs'} ${ev.opp}`} sx={{ borderRadius: 1 }} />
+            {list.slice(0, visibleChips).map((ev, i) => (
+              <Chip
+                key={i}
+                size="small"
+                label={`${ev.homeAway === 'Away' ? '@' : 'vs'} ${ev.opp}`}
+                sx={{
+                  borderRadius: 1,
+                  maxWidth: '100%',
+                  '& .MuiChip-label': {
+                    px: 0.5,
+                    fontSize: { xs: 10, sm: 11 },
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }
+                }}
+              />
             ))}
-            {list.length > 2 && <Chip size="small" label={`+${list.length - 2}`} sx={{ borderRadius: 1 }} />}
+            {list.length > visibleChips && (
+              <Chip
+                size="small"
+                label={`+${list.length - visibleChips}`}
+                sx={{ borderRadius: 1, '& .MuiChip-label': { px: 0.5, fontSize: { xs: 10, sm: 11 } } }}
+              />
+            )}
           </Box>
         )}
       </Box>
@@ -162,22 +193,22 @@ function MonthGrid({ monthStart, eventsMap }){
 
   return (
     <Card variant="outlined" sx={{ borderRadius:1, width:'100%' }}>
-      <CardContent sx={{ p:2 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight:700, mb:2 }}>
+      <CardContent sx={{ p:{ xs: 1.25, sm: 2 } }}>
+        <Typography variant="subtitle1" sx={{ fontWeight:700, mb:{ xs: 1, sm: 2 } }}>
           {monthStart.toLocaleDateString(undefined,{ month:'long', year:'numeric' })}
         </Typography>
 
         {/* Header row SMTWTFS in 7 equal columns */}
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, mb: 1 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: { xs: 0.5, sm: 1 }, mb: { xs: 0.5, sm: 1 } }}>
           {['S','M','T','W','T','F','S'].map((d, i)=>(
             <Box key={i} sx={{ px: 0.5 }}>
-              <Typography variant="caption" sx={{ opacity: 0.7 }}>{d}</Typography>
+              <Typography variant="caption" sx={{ opacity: 0.7, fontSize: { xs: 10, sm: 12 } }}>{d}</Typography>
             </Box>
           ))}
         </Box>
 
         {/* 42 equal square cells */}
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: { xs: 0.5, sm: 1 } }}>
           {days.map((d, idx)=>{
             const key = dateKeyFromDate(d);
             const list = eventsMap.get(key) || [];
@@ -259,24 +290,63 @@ export default function GameCalendar(){
 
   const eventsMap=useMemo(()=> bucketByDay(events),[events]);
 
+  const theme = useTheme();
+  const isXs = useMediaQuery(theme.breakpoints.down('sm'));
+
   return (
-    <Box sx={{ mx:'auto', width:'100%', maxWidth:{ xs: 500, md: 600, lg: 700 } }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb:2 }}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="h6" sx={{ fontSize:{ xs:18, sm:20 }, fontWeight:700 }}>
-            {team?.name ? `${team.name} — Upcoming` : 'Select a team — Upcoming'}
+    <Box sx={{
+      mx:'auto',
+      width:'100%',
+      maxWidth:{ xs: 520, sm: 720, md: 880 },
+      px:{ xs: 1, sm: 2 },
+      py:{ xs: 1.5, sm: 2 }
+    }}>
+      {/* Responsive header: stack on phones, row on tablet+ */}
+      <Stack spacing={1} sx={{ mb:2 }}>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={{ xs: 0.75, sm: 1 }}
+          alignItems={{ xs: 'flex-start', sm: 'center' }}
+          justifyContent="space-between"
+        >
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+            <Typography variant="h6" sx={{ fontSize:{ xs:18, sm:20 }, fontWeight:700 }}>
+              {team?.name ? `${team.name} — Upcoming` : 'Select a team — Upcoming'}
+            </Typography>
+            {team?.code && <Chip size="small" label={team.code} />}
+          </Stack>
+
+          {/* Month + Nav: move below title on xs */}
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{ alignSelf: { xs: 'flex-start', sm: 'center' } }}
+          >
+            <Chip
+              size="small"
+              variant="outlined"
+              label={viewMonth.toLocaleDateString(undefined,{month:'long', year:'numeric'})}
+            />
+            <IconButton size="small" onClick={()=> setViewMonth(m => addMonths(m, -1))}><ChevronLeftIcon fontSize="small" /></IconButton>
+            <IconButton size="small" onClick={()=> setViewMonth(m => addMonths(m, +1))}><ChevronRightIcon fontSize="small" /></IconButton>
+          </Stack>
+        </Stack>
+
+        {/* Optional error helper line under header on mobile */}
+        {loadErr && (
+          <Typography variant="caption" sx={{ color:'warning.main' }}>
+            Load error: {loadErr}
           </Typography>
-          {team?.code && <Chip size="small" label={team.code} />}
-          <Chip size="small" variant="outlined" label={viewMonth.toLocaleDateString(undefined,{month:'long', year:'numeric'})} />
-        </Stack>
-        <Stack direction="row" spacing={0.5}>
-          <IconButton size="small" onClick={()=> setViewMonth(m => addMonths(m, -1))}><ChevronLeftIcon fontSize="small" /></IconButton>
-          <IconButton size="small" onClick={()=> setViewMonth(m => addMonths(m, +1))}><ChevronRightIcon fontSize="small" /></IconButton>
-        </Stack>
+        )}
       </Stack>
 
       {loading ? (
-        <Card variant="outlined"><CardContent><Typography variant="body2">Loading schedule…</Typography></CardContent></Card>
+        <Card variant="outlined">
+          <CardContent>
+            <Typography variant="body2">Loading schedule…</Typography>
+          </CardContent>
+        </Card>
       ) : (
         <MonthGrid monthStart={viewMonth} eventsMap={eventsMap} />
       )}
@@ -288,11 +358,6 @@ export default function GameCalendar(){
               ? `No regular-season games for ${team.code} in this month.`
               : 'Pick a team to see games.'}
           </Typography>
-          {loadErr && (
-            <Typography variant="caption" sx={{ opacity:0.9, color:'warning.main' }}>
-              Load error: {loadErr}
-            </Typography>
-          )}
         </Stack>
       )}
     </Box>
