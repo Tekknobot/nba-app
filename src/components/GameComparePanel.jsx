@@ -727,20 +727,88 @@ function ProbabilityCard({ game, edge, anchorISO }) {
   );
 }
 
+function formatWhenFromGame(game) {
+  // Prefer the ISO with a real clock; fall back to dateKey-only
+  if (game?._iso && game?.hasClock) {
+    try {
+      return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" })
+        .format(new Date(game._iso));
+    } catch {}
+  }
+  if (game?.dateKey) {
+    try {
+      return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" })
+        .format(new Date(`${game.dateKey}T12:00:00Z`));
+    } catch {}
+  }
+  return "TBD";
+}
+
+function shortLiveStatusLabel(status = "") {
+  const s = String(status);
+  const m = s.match(/end of\s*(\d)/i);
+  if (m) return `End Q${m[1]}`;
+  // Common labels from BDL: "In Progress", "Halftime", "Final", etc.
+  return s;
+}
+
 function NarrativeBlock({ game, a, b, h2h }) {
   if (!game) return null;
+
   const status = String(game?.status || "");
   const isFinal = /final/i.test(status);
   const isLive  = /in progress|end of|halftime|quarter|q\d/i.test(status);
-  const home = game?.home?.code || "HOME";
-  const away = game?.away?.code || "AWAY";
 
-  const last10Home = b?.data?.games || [];
-  const last10Away = a?.data?.games || [];
-  const WLT = (arr) => { let w=0,l=0,t=0; arr.forEach(g => (g.result==='W'?w++:g.result==='L'?l++:t++)); return `${w}-${l}${t?`-${t}`:''}`; };
-  const hForm = last10Home.length ? WLT(last10Home) : "0-0";
-  const aForm = last10Away.length ? WLT(last10Away) : "0-0";
-  const h2hLine = h2h?.data ? `This season, ${home} lead the series ${h2h.data.aWins}–${h2h.data.bWins}.` : "";
+  const homeCode = game?.home?.code || "HOME";
+  const awayCode = game?.away?.code || "AWAY";
+  const homeName = game?.home?.name || homeCode;
+  const awayName = game?.away?.name || awayCode;
+
+  const homeScore = Number.isFinite(game?.homeScore) ? Number(game.homeScore) : null;
+  const awayScore = Number.isFinite(game?.awayScore) ? Number(game.awayScore) : null;
+
+  const last10Home = a?.data?.team === homeCode ? a?.data?.games : b?.data?.games || [];
+  const last10Away = a?.data?.team === awayCode ? a?.data?.games : a?.data?.games || [];
+
+  const WLT = (arr = []) => {
+    let w=0,l=0,t=0;
+    arr.forEach(g => (g.result==='W'?w++:g.result==='L'?l++:t++));
+    return `${w}-${l}${t?`-${t}`:''}`;
+  };
+  const hForm = (b?.data?.games?.length ? WLT(b.data.games) : (a?.data?.team === homeCode ? WLT(a?.data?.games) : WLT(last10Home))) || "0-0";
+  const aForm = (a?.data?.games?.length ? WLT(a.data.games) : (b?.data?.team === awayCode ? WLT(b?.data?.games) : WLT(last10Away))) || "0-0";
+
+  const whenLabel = formatWhenFromGame(game);
+
+  // H2H line (this season)
+  const h2hLine = h2h?.data ? `This season: ${homeCode} ${h2h.data.aWins}–${h2h.data.bWins} ${awayCode}.` : "";
+
+  // Compose the first sentence for each state
+  let headline;
+  if (isFinal) {
+    if (homeScore !== null && awayScore !== null) {
+      const homeWon = homeScore > awayScore;
+      const winnerName = homeWon ? homeName : awayName;
+      const loserName  = homeWon ? awayName : homeName;
+      const winnerPts  = Math.max(homeScore, awayScore);
+      const loserPts   = Math.min(homeScore, awayScore);
+      const margin = winnerPts - loserPts;
+      headline = `Final — ${winnerName} beat ${loserName} ${winnerPts}–${loserPts}${margin ? ` (by ${margin})` : ""}.`;
+    } else {
+      headline = `Final — ${awayName} at ${homeName}.`;
+    }
+  } else if (isLive) {
+    const liveLabel = shortLiveStatusLabel(status);
+    headline = `Live — ${homeCode} ${homeScore ?? "–"} — ${awayCode} ${awayScore ?? "–"} (${liveLabel}).`;
+  } else {
+    headline = `Preview — ${awayName} at ${homeName} on ${whenLabel}.`;
+  }
+
+  // Secondary context for non-final states
+  let context = "";
+  if (!isFinal) {
+    context = `Recent form: ${homeCode} ${hForm}, ${awayCode} ${aForm}.`;
+  }
 
   return (
     <Card variant="outlined" sx={{ borderRadius:1 }}>
@@ -749,11 +817,15 @@ function NarrativeBlock({ game, a, b, h2h }) {
           {isFinal ? "Game recap" : isLive ? "Live update" : "Game preview"}
         </Typography>
 
-        <Typography variant="body2" sx={{ mb:1 }}>
-          {isFinal
-            ? `Final: ${(Number(game?.homeScore)>Number(game?.awayScore)?home:away)} win ${Math.max(game.homeScore ?? 0, game.awayScore ?? 0)}–${Math.min(game.homeScore ?? 0, game.awayScore ?? 0)}.`
-            : `${away} visit ${home}. Recent form: ${home} ${hForm}, ${away} ${aForm}.`}
+        <Typography variant="body2" sx={{ mb: isFinal ? 0.5 : 1 }}>
+          {headline}
         </Typography>
+
+        {!isFinal && (
+          <Typography variant="body2" sx={{ mb: h2hLine ? 0.5 : 0 }}>
+            {context}
+          </Typography>
+        )}
 
         {h2hLine && (
           <List dense sx={{ mt:0, pt:0 }}>
@@ -766,6 +838,7 @@ function NarrativeBlock({ game, a, b, h2h }) {
     </Card>
   );
 }
+
 
 /* ====================== main shared panel ====================== */
 export default function GameComparePanel({ game }) {
