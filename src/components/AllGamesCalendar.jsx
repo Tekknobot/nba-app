@@ -583,7 +583,7 @@ export default function AllGamesCalendar(){
       </Card>
 
       {/* 👇 Daily original content */}
-      <HaikuOfTheDay compact look="script" />
+      <HaikuOfTheDay compact look="typewriter" />
 
       {/* header */}
       <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
