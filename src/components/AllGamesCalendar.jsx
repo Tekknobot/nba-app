@@ -25,6 +25,20 @@ import Link from "@mui/material/Link";
 import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
 import { Link as RouterLink } from "react-router-dom";
 
+// Rough NBA calendar: regular season runs Oct–Jun; offseason Jul–Sep
+function isOffseasonMonth(d = new Date()) {
+  const m = d.getMonth(); // 0..11
+  return m >= 6 && m <= 8; // Jul (6), Aug (7), Sep (8)
+}
+
+// Does the eventsMap have any games at all this month?
+function mapHasAnyGames(map) {
+  for (const arr of map.values()) {
+    if (Array.isArray(arr) && arr.length) return true;
+  }
+  return false;
+}
+
 /* ========= small date helpers ========= */
 function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
 function addMonths(d,n){ const x=new Date(d); x.setDate(1); x.setMonth(x.getMonth()+n); return x; }
@@ -524,6 +538,9 @@ export default function AllGamesCalendar(){
     return bucketByDayAll(monthGames);
   }, [allGames, viewMonth]);
 
+  const monthHasGames = useMemo(() => mapHasAnyGames(eventsMap), [eventsMap]);
+  const inOffseasonView = isOffseasonMonth(viewMonth);
+
   const selectedKey = dateKeyFromDate(selectedDate);
   const selectedGames = eventsMap.get(selectedKey) || [];
 
@@ -579,6 +596,42 @@ export default function AllGamesCalendar(){
         </CardContent>
       </Card>
 
+      {/* Offseason / empty-month fallback (always real content for AdSense) */}
+      {!loading && !monthHasGames && (
+        <Card variant="outlined" sx={{ borderRadius: 1, mb: 2 }}>
+          <CardContent sx={{ p: 2 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
+              {inOffseasonView ? "We’re between seasons" : "No games in this month"}
+            </Typography>
+            <Typography variant="body2" sx={{ opacity: 0.9, mb: 1 }}>
+              {inOffseasonView
+                ? "The NBA regular season begins in October. Until tip-off, you can still read the latest news and learn how our simple “Model edge” works below."
+                : "There aren’t any scheduled games in this month’s view. Try the arrows to switch months, or explore the news and our quick model explainer below."}
+            </Typography>
+
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <Button
+                component={RouterLink}
+                to="/about"
+                variant="outlined"
+                size="small"
+              >
+                How “Model edge” works
+              </Button>
+              <Button
+                href="https://www.nba.com/news"
+                target="_blank"
+                rel="noopener"
+                variant="outlined"
+                size="small"
+              >
+                Latest NBA headlines
+              </Button>
+            </Stack>
+          </CardContent>
+        </Card>
+      )}
+      
       {/* day strip */}
       <Box ref={stripRef} sx={{ display:'flex', gap:1, overflowX:'auto', pb:1, "&::-webkit-scrollbar": { display:'none' } }}>
         {monthDays.map((d, idx)=>{
