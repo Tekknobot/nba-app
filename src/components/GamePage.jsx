@@ -2,11 +2,9 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link as RouterLink } from "react-router-dom";
 import { Box, Typography, Card, CardContent } from "@mui/material";
-import GameComparePanel from "./GameComparePanel"; // ⬅️ NEW
+import GameComparePanel from "./GameComparePanel";
 
 const BDL_BASE = "/api/bdl";
-
-// (keep your existing helpers: sleep, withRetry, bdl, fetchGameById, etc.)
 
 export default function GamePage() {
   const { id } = useParams();
@@ -17,7 +15,6 @@ export default function GamePage() {
     let ok = true;
     (async () => {
       try {
-        // reuse your existing fetcher
         const r = await fetch(`${BDL_BASE}/games/${id}`, { cache: "no-store" });
         const txt = await r.text();
         if (!r.ok) throw new Error(`BDL ${r.status}: ${txt.slice(0, 220)}`);
@@ -29,16 +26,13 @@ export default function GamePage() {
           _iso: g.date || null,
           dateKey: (g.date || "").slice(0, 10),
           hasClock: !!(g.date && new Date(g.date).getUTCHours() !== 0),
-          home: {
-            code: (g.home_team?.abbreviation || "").toUpperCase(),
-            name: g.home_team?.full_name || g.home_team?.name || "",
-          },
-          away: {
-            code: (g.visitor_team?.abbreviation || "").toUpperCase(),
-            name: g.visitor_team?.full_name || g.visitor_team?.name || "",
-          },
+          home: { code: (g.home_team?.abbreviation || "").toUpperCase(), name: g.home_team?.full_name || g.home_team?.name || "" },
+          away: { code: (g.visitor_team?.abbreviation || "").toUpperCase(), name: g.visitor_team?.full_name || g.visitor_team?.name || "" },
           homeScore: Number.isFinite(g.home_team_score) ? g.home_team_score : null,
           awayScore: Number.isFinite(g.visitor_team_score) ? g.visitor_team_score : null,
+          // NOTE: predictions are attached in the calendar list; if you deep-link straight here,
+          // the panel still renders (probability bar shows only if pHome is on the game object).
+          model: g.model || null,
         };
         if (!ok) return;
         setGame(formed);
@@ -81,7 +75,7 @@ export default function GamePage() {
         {game.away.name} at {game.home.name}
       </Typography>
 
-      {/* 🔁 The exact same content as the drawer */}
+      {/* shared compare panel */}
       <Box sx={{ mt: 2 }}>
         <GameComparePanel game={game} />
       </Box>
