@@ -18,6 +18,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 
 import SportsBasketballIcon from "@mui/icons-material/SportsBasketball";
+import GameComparePanel from "./GameComparePanel";
 
 import {
   summarizeLastNGames,
@@ -1328,428 +1329,7 @@ async function fetchGameByIdBDL(gameId) {
 
 /* ========= Drawer ========= */
 function ComparisonDrawer({ open, onClose, game }) {
-  const [a, setA] = useState({ loading: true, error: null, data: null }); // away recent form
-  const [b, setB] = useState({ loading: true, error: null, data: null }); // home recent form
-  const [probs, setProbs] = useState(null);
-  const [live, setLive] = useState(null);
-  const gameAnchorISO = (game?._iso || "").slice(0,10) || (game?.dateKey || toISODateOnly(new Date()));
-  const isInPast = new Date(gameAnchorISO) < new Date(toISODateOnly(new Date()));
-
-  // head-to-head
-  const [h2h, setH2h] = useState({ loading: true, error: null, data: null });
-
-  // mini-averages (rolling recent; fallback to season if blocked)
-  const [mini, setMini] = useState({ loading: true, error: null, data: null }); // { away:[], home:[] }
-  const [miniMode, setMiniMode] = useState("recent"); // "recent" | "season-fallback"
-  const [avgSeason, setAvgSeason] = useState(2025);   // used when season-fallback is in play
-
-// ------------------ Recent form (last-10 inside recent window) with season fallback ------------------
-useEffect(() => {
-  if (!open || !game?.home?.code || !game?.away?.code) return;
-  let cancelled = false;
-
-  (async () => {
-    try {
-      setA({ loading: true, error: null, data: null });
-      setB({ loading: true, error: null, data: null });
-
-      // Always pull the last 10 from THIS season up to the selected date
-      let [Ares, Bres] = await Promise.all([
-        fetchTeamLast10UpToBDL(game.away.code, gameAnchorISO),
-        fetchTeamLast10UpToBDL(game.home.code, gameAnchorISO),
-      ]);
-
-      // If BOTH sides have zero, show a friendly message (no previous-season fallback)
-      const bothEmpty = !(Ares?.games?.length) && !(Bres?.games?.length);
-      if (bothEmpty) {
-        if (cancelled) return;
-        const msg = `No games this season as of ${gameAnchorISO}.`;
-        setA({ loading: false, error: msg, data: { team: game?.away?.code, games: [] } });
-        setB({ loading: false, error: msg, data: { team: game?.home?.code, games: [] } });
-        return;
-      }
-
-      if (cancelled) return;
-      setA({ loading: false, error: null, data: Ares });
-      setB({ loading: false, error: null, data: Bres });
-    } catch (e) {
-      if (cancelled) return;
-      const msg = e?.message || String(e);
-      setA({ loading: false, error: msg, data: { team: game?.away?.code, games: [] } });
-      setB({ loading: false, error: msg, data: { team: game?.home?.code, games: [] } });
-    }
-  })();
-
-  return () => { cancelled = true; };
-}, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
-
-  // ------------------ Head-to-head (this season) ------------------
-  useEffect(() => {
-    if (!open || !game?.home?.code || !game?.away?.code) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        setH2h({ loading: true, error: null, data: null });
-        const { start, end } = seasonWindowUpTo(gameAnchorISO);
-        const { aWins, bWins } = await fetchHeadToHeadBDL(game.home.code, game.away.code, { start, end });
-        if (cancelled) return;
-        setH2h({ loading: false, error: null, data: { aWins, bWins } });
-      } catch (e) {
-        if (cancelled) return;
-        setH2h({ loading: false, error: e?.message || String(e), data: null });
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
-
-// ------------------ Rolling recent player averages (fallback to season) ------------------
-useEffect(() => {
-  if (!open || !game?.home?.code || !game?.away?.code) return;
-  let cancelled = false;
-
-  (async () => {
-    try {
-      setMini({ loading: true, error: null, data: null });
-      setMiniMode("recent");
-
-      // First try the recent window via /v1/stats anchored to the game date
-      let awayRecent, homeRecent;
-      try {
-        [awayRecent, homeRecent] = await Promise.all([
-          fetchRecentPlayerAveragesBDL(game.away.code, { days: 21, anchorISO: gameAnchorISO }),
-          fetchRecentPlayerAveragesBDL(game.home.code, { days: 21, anchorISO: gameAnchorISO }),
-        ]);
-      } catch (tierErr) {
-        // Likely API key/tier limits -> fall back to season averages via your proxy
-        setMiniMode("season-fallback");
-
-        // 1) Rosters (get BDL IDs from here)
-        const [awayRoster, homeRoster] = await Promise.all([
-          fetchTeamRosterByTeamIdBDL(game.away.code),
-          fetchTeamRosterByTeamIdBDL(game.home.code),
-        ]);
-        if (cancelled) return;
-
-        const normIds = (arr) =>
-          Array.from(new Set((arr || [])
-            .map(p => Number(p?.id))
-            .filter(n => Number.isInteger(n) && n > 0)))
-            .slice(0, 30);
-
-        const awayIds = normIds(awayRoster);
-        const homeIds = normIds(homeRoster);
-
-        // Proxy call for season_averages (unchanged from your version)
-        const callAvg = async (ids, season) => {
-          if (!ids.length) return [];
-          const qs = new URLSearchParams({ season: String(season) });
-          ids.forEach(id => qs.append("player_id", String(id)));
-          const base = (typeof API_BASE === "string" && API_BASE) ? API_BASE : "";
-          const url = `${base}/api/bdl/season-averages?${qs.toString()}`;
-
-          const res = await fetch(url, { cache: "no-store" });
-          const ct = (res.headers.get("content-type") || "").toLowerCase();
-          const txt = await res.text();
-          if (!ct.includes("application/json")) {
-            throw new Error(`Non-JSON from ${url}: ${txt.slice(0,200).replace(/\s+/g," ").trim()}`);
-          }
-          const body = JSON.parse(txt);
-          if (body?.error === "bdl_error") throw new Error(`BDL ${body.status}: ${JSON.stringify(body.body)}`);
-          if (body?.error) throw new Error(body.error);
-          return Array.isArray(body?.data) ? body.data : [];
-        };
-
-        function currentSeasonEndYear(d = new Date()) {
-          // NBA seasons run Oct–Jun; "season" is named by the END year
-          const y = d.getFullYear();
-          const m = d.getMonth(); // 0=Jan ... 9=Oct
-          return (m >= 9) ? y + 1 : y; // Oct (9) or later -> next calendar year
-        }
-        const thisSeason = currentSeasonEndYear();
-
-        let [awayAvgs, homeAvgs] = await Promise.all([
-          callAvg(awayIds, thisSeason),
-          callAvg(homeIds, thisSeason),
-        ]);
-        let usedSeason = thisSeason;
-
-        if ((!awayAvgs?.length) && (!homeAvgs?.length)) {
-          const prev = thisSeason - 1;
-          [awayAvgs, homeAvgs] = await Promise.all([
-            callAvg(awayIds, prev),
-            callAvg(homeIds, prev),
-          ]);
-          usedSeason = prev;
-        }
-        if (cancelled) return;
-
-        setAvgSeason(usedSeason);
-
-        // Attach names
-        const aMap = new Map(awayRoster.map(p => [p.id, p]));
-        const hMap = new Map(homeRoster.map(p => [p.id, p]));
-        awayAvgs.forEach(x => (x.player = aMap.get(x.player_id)));
-        homeAvgs.forEach(x => (x.player = hMap.get(x.player_id)));
-
-        // Top 3 by minutes, fallback by points
-        const minToNum = (m) => {
-          if (!m || typeof m !== "string") return 0;
-          const [mm, ss] = m.split(":").map(Number);
-          return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss/60 : 0);
-        };
-        const pickTop = (arr) => {
-          const copy = [...arr];
-          copy.sort((x, y) => {
-            const ym = minToNum(y.min), xm = minToNum(x.min);
-            if (ym !== xm) return ym - xm;
-            return (y.pts || 0) - (x.pts || 0);
-          });
-          return copy.slice(0, 3);
-        };
-
-        setMini({
-          loading: false,
-          error: "Recent player stats unavailable (need GOAT tier or valid API key). Showing season averages.",
-          data: { away: pickTop(awayAvgs), home: pickTop(homeAvgs) }
-        });
-        return; // done via fallback path
-      }
-
-      // If recent stats succeeded, take top 3 by recent minutes (already averaged)
-      const pickTopRecent = (pack) => (pack?.players || []).slice(0, 3);
-      if (cancelled) return;
-      setMini({
-        loading: false,
-        error: null,
-        data: {
-          away: pickTopRecent(awayRecent),
-          home: pickTopRecent(homeRecent),
-        }
-      });
-      // For the accordion label; not used when in "recent" mode but harmless
-      setAvgSeason(new Date().getFullYear());
-    } catch (e) {
-      if (cancelled) return;
-      setMini({ loading: false, error: e?.message || String(e), data: null });
-    }
-  })();
-
-  return () => { cancelled = true; };
-}, [open, game?.home?.code, game?.away?.code, gameAnchorISO]);
-
-  // ------------------ Build probabilities (async; recent -> prior fallback) ------------------
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!open) return;
-      if (a.loading || b.loading) return;
-      if (a.error || b.error) { setProbs(null); return; }
-      const built = await buildProbsForGameAsync({ game, awayData: a.data, homeData: b.data });
-      if (!cancelled) setProbs(built);
-    })();
-    return () => { cancelled = true; };
-  }, [open, a.loading, b.loading, a.error, b.error, a.data, b.data, game]);
-
-  // ------------------ Live polling (BDL game-by-id) ------------------
-  useEffect(() => {
-    if (!open || !game?.id) return;
-    if (isInPast) return; // do not poll historic games
-
-    let stop = false;
-    let timer = null;
-
-    const load = async () => {
-      try {
-        const g = await fetchGameByIdBDL(game.id);
-        if (stop) return;
-
-        setLive({
-          status: g.status,               // "In Progress", "Final", "Halftime"
-          homeCode: g.homeCode,
-          awayCode: g.awayCode,
-          homeScore: g.homeScore,
-          awayScore: g.awayScore,
-          period: g.period,
-          time: g.time,                   // "08:12" or ""
-          isFinal: /final/i.test(g.status || ""),
-          isLive: /in progress|end of|halftime|quarter|q\d/i.test(g.status || ""),
-        });
-
-        if (/final/i.test(g.status || "")) return;         // stop when final
-        timer = setTimeout(load, 15000);                   // poll again
-      } catch {
-        if (!stop) timer = setTimeout(load, 20000);        // gentle backoff
-      }
-    };
-
-    load();
-    return () => { stop = true; if (timer) clearTimeout(timer); };
-  }, [open, game?.id, isInPast]);
-
-  // ✔/✖ verdict chip (only when Final)
-  const verdict = verdictFromProbs(game, probs);
-
-  // Small label to reflect data mode in the Top Players accordion
-  const miniModeLabel = miniMode === "recent" ? "last 21 days" : "season averages (fallback)";
-
-  // ⬇️ put this inside ComparisonDrawer, anywhere before the `return ( ... )`
-  function NarrativeBlockWritten({ game, probs, a, b, h2h, mini, miniModeLabel = "last 21 days" }) {
-  if (!game) return null;
-
-  // ---------- tiny helpers (safe + deterministic flavor) ----------
-  const status = String(game?.status || "");
-  const isFinal = /final/i.test(status);
-  const isLive  = /in progress|end of|halftime|quarter|q\d/i.test(status);
-
-  const home = game?.home?.code || "HOME";
-  const away = game?.away?.code || "AWAY";
-
-  const last10Home = b?.data?.games || [];
-  const last10Away = a?.data?.games || [];
-
-  const WLT = (arr) => {
-    let w=0,l=0,t=0; arr.forEach(g => (g.result==='W'?w++:g.result==='L'?l++:t++));
-    return { w, l, t, label: `${w}-${l}${t?`-${t}`:''}` };
-  };
-
-  const safeWhen = (() => {
-    const dtISO = game?._iso ? new Date(game._iso) : null;
-    const dtKey = game?.dateKey ? new Date(`${game.dateKey}T12:00:00Z`) : null;
-    const dt    = (dtISO && !Number.isNaN(+dtISO)) ? dtISO :
-                  (dtKey && !Number.isNaN(+dtKey)) ? dtKey : null;
-    if (!dt) return "TBD";
-    try {
-      return game?.hasClock
-        ? new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"short" }).format(dt)
-        : new Intl.DateTimeFormat(undefined, { dateStyle:"medium" }).format(dt);
-    } catch { return "TBD"; }
-  })();
-
-  // deterministic pick helper (so the prose feels varied but stable)
-  function hashStr(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i))|0; return Math.abs(h); }
-  function pick(seed, arr){ return arr[ seed % arr.length ]; }
-  const seed = hashStr(`${game?.dateKey}|${home}|${away}|${status}`);
-
-  // phrase banks
-  const previewLeads = [
-    `${away} visit ${home}`,
-    `${home} host ${away}`,
-    `${away} head to ${home}`,
-    `${home} welcome ${away}`
-  ];
-  const liveLeads = [
-    `Live from the court`,
-    `Underway`,
-    `In progress`,
-    `The action continues`
-  ];
-  const recapLeads = [
-    `Final in the books`,
-    `All wrapped up`,
-    `That’s a final`,
-    `Result finalized`
-  ];
-
-  const hForm = WLT(last10Home).label || "0-0";
-  const aForm = WLT(last10Away).label || "0-0";
-
-  // factors -> readable snippets
-  const factorSnips = (Array.isArray(probs?.factors) ? probs.factors : [])
-    .slice(0, 3)
-    .map(f => String(f?.label || "").toLowerCase())
-    .map(lbl => {
-      if (/rest/.test(lbl)) return "rest advantage";
-      if (/pace|tempo/.test(lbl)) return "pace and shot volume";
-      if (/defen/.test(lbl)) return "defensive efficiency";
-      if (/offen/.test(lbl)) return "half-court offense";
-      if (/b2b|back[-\s]?to[-\s]?back/.test(lbl)) return "back-to-back fatigue";
-      if (/turnover/.test(lbl)) return "turnover margin";
-      if (/rebound/.test(lbl)) return "rebounding edge";
-      return lbl;
-    });
-
-  const modelPct = Number.isFinite(Number(probs?.pHome)) ? Math.round(Number(probs.pHome) * 100) : null;
-  const modelMode = probs?.mode === "recent" ? "recent form"
-                  : probs?.mode === "prior"  ? "a prior season model"
-                  : "available data";
-
-  // top players mini blurbs (if we have them)
-  const miniAway = mini?.data?.away?.[0];
-  const miniHome = mini?.data?.home?.[0];
-  const fmtNum = (v) => (v ?? 0).toFixed(1);
-  const nameOf = (p) => {
-    const f = p?.player?.first_name || "";
-    const l = p?.player?.last_name || "";
-    return (f && l) ? `${f} ${l}` : (l || f || `#${p?.player_id||"?"}`);
-    };
-
-  const homeStar = miniHome ? `${nameOf(miniHome)} (${fmtNum(miniHome.pts)} pts, ${fmtNum(miniHome.reb)} reb, ${fmtNum(miniHome.ast)} ast ${miniModeLabel})` : null;
-  const awayStar = miniAway ? `${nameOf(miniAway)} (${fmtNum(miniAway.pts)} pts, ${fmtNum(miniAway.reb)} reb, ${fmtNum(miniAway.ast)} ast ${miniModeLabel})` : null;
-
-  // H2H line
-  const h2hLine = h2h?.data ? `This season, ${home} lead the series ${h2h.data.aWins}–${h2h.data.bWins}.` : "";
-
-  // primary top line
-  let lead, bodyTop;
-  if (isFinal) {
-    const hs = Number(game?.homeScore ?? NaN);
-    const as = Number(game?.awayScore ?? NaN);
-    const scoreKnown = Number.isFinite(hs) && Number.isFinite(as);
-    const winner = scoreKnown ? (hs > as ? home : away) : null;
-    lead = pick(seed, recapLeads);
-    bodyTop = scoreKnown
-      ? `${lead}: ${winner} win ${Math.max(hs,as)}–${Math.min(hs,as)}.`
-      : `${lead}: ${away} at ${home}.`;
-  } else if (isLive) {
-    lead = pick(seed, liveLeads);
-    bodyTop = `${lead}: ${home} ${game?.homeScore ?? "–"} — ${away} ${game?.awayScore ?? "–"} (${status}).`;
-  } else {
-    lead = pick(seed, previewLeads);
-    bodyTop = `${lead} on ${safeWhen}. Recent form: ${home} ${hForm}, ${away} ${aForm}.`;
-  }
-
-  // model sentence
-  const modelLine = (modelPct == null)
-    ? ""
-    : `Our model, built on ${modelMode}, gives ${home} a ${modelPct}% chance at home.`;
-
-  // “three things” style bullets (only if we have anything to say)
-  const bullets = [];
-  if (factorSnips.length) bullets.push(`Watch for ${factorSnips.join(", ")}.`);
-  if (homeStar || awayStar) {
-    const who = [homeStar, awayStar].filter(Boolean).join(" vs ");
-    bullets.push(`Impact players: ${who}.`);
-  }
-  if (h2hLine) bullets.push(h2hLine);
-
-  return (
-    <Card variant="outlined" sx={{ borderRadius:1 }}>
-      <CardContent sx={{ p:2 }}>
-        <Typography component="h2" variant="subtitle1" sx={{ fontWeight:700, mb:0.5 }}>
-          {isFinal ? "Game recap" : isLive ? "Live update" : "Game preview"}
-        </Typography>
-
-        <Typography variant="body2" sx={{ mb:1 }}>
-          {bodyTop}
-        </Typography>
-
-        {modelLine && (
-          <Typography variant="body2" sx={{ mb: 1 }}>{modelLine}</Typography>
-        )}
-
-        {!!bullets.length && (
-          <List dense sx={{ mt:0, pt:0 }}>
-            {bullets.map((b, i) => (
-              <ListItem key={i} disableGutters sx={{ py:0.25 }}>
-                <ListItemText primaryTypographyProps={{ variant:'body2' }} primary={b} />
-              </ListItem>
-            ))}
-          </List>
-        )}
-      </CardContent>
-    </Card>
-  );
-  }
+  if (!open || !game) return null;
 
   return (
     <Drawer
@@ -1769,184 +1349,34 @@ useEffect(() => {
       }}
     >
       {/* header */}
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        sx={{ mb: 2 }}
+      >
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
           Recent form — {game?.away?.code} @ {game?.home?.code}
         </Typography>
 
-        <Stack direction="row" spacing={1} alignItems="center">
-          {verdict && (
-            verdict.state === 'correct' ? (
-              <Tooltip title={verdict.tooltip}>
-                <Chip size="small" color="success" variant="outlined"
-                      icon={<CheckCircleIcon fontSize="small" />} label="Correct" />
-              </Tooltip>
-            ) : (
-              <Tooltip title={verdict.tooltip}>
-                <Chip size="small" color="error" variant="outlined"
-                      icon={<CancelIcon fontSize="small" />} label="Wrong" />
-              </Tooltip>
-            )
-          )}
-          <IconButton onClick={onClose}><CloseIcon /></IconButton>
-        </Stack>
+        <IconButton onClick={onClose}>
+          <CloseIcon />
+        </IconButton>
       </Stack>
 
-      {/* after the Last10 lists and before ProbabilityCard */}
-      <NarrativeBlockWritten
-        game={game}
-        probs={probs}
-        a={a}
-        b={b}
-        h2h={h2h}
-        mini={mini}
-        miniModeLabel={miniModeLabel}
-      />
-
-      <Divider sx={{ my: 1 }} />
+      <Divider sx={{ mb: 1 }} />
 
       {/* scrollable middle */}
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', pr: 0.5 }}>
-        <Typography variant="caption" sx={{ opacity: 0.8, mb: 1, display: 'block' }}>
+        <Typography
+          variant="caption"
+          sx={{ opacity: 0.8, mb: 1, display: 'block' }}
+        >
           Clicked game: {game?.away?.name} at {game?.home?.name}
         </Typography>
 
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-          <Last10List
-            title={`${game?.away?.code} (${game?.away?.name})`}
-            loading={a.loading}
-            error={a.error}
-            data={a.data}
-          />
-          <Last10List
-            title={`${game?.home?.code} (${game?.home?.name})`}
-            loading={b.loading}
-            error={b.error}
-            data={b.data}
-          />
-        </Stack>
-
-        {/* recent window anchor caption */}
-        <Typography variant="caption" sx={{ opacity: 0.65, mt: 0.25, display:'block' }}>
-          Showing last 10 this season up to {gameAnchorISO}
-        </Typography>
-
-        <ProbabilityCard
-          probs={probs}
-          homeCode={game?.home?.code}
-          awayCode={game?.away?.code}
-          verdict={verdict}
-        />
-
-        {/* --- Head-to-head (this season) --- */}
-        {h2h.loading ? (
-          <Typography variant="caption" sx={{ opacity:0.7, mt:1, display:'block' }}>
-            Loading season series…
-          </Typography>
-        ) : h2h.error ? (
-          <Typography variant="caption" color="warning.main" sx={{ mt:1, display:'block' }}>
-            H2H error: {h2h.error}
-          </Typography>
-        ) : h2h.data ? (
-          <Typography variant="body2" sx={{ mt:1 }}>
-            Season series: <strong>{game?.home?.code} {h2h.data.aWins}–{h2h.data.bWins} {game?.away?.code}</strong>
-          </Typography>
-        ) : null}
-
-        {/* --- Top players (rolling or fallback) --- */}
-        <Accordion sx={{ mt:1.5 }} disableGutters>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
-              Top players
-            </Typography>
-            <Typography variant="caption" sx={{ ml:1, opacity:0.7 }}>
-              {miniModeLabel}{miniMode === "season-fallback" ? ` ’${String(avgSeason).slice(2)}` : ""}
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails>
-            {mini.loading ? (
-              <Stack alignItems="center" sx={{ py:1 }}>
-                <CircularProgress size={18} />
-              </Stack>
-            ) : mini.error ? (
-              <Typography variant="caption" color="warning.main">
-                {mini.error}
-              </Typography>
-            ) : mini.data ? (
-              <Stack spacing={1.25}>
-                {/* Away group */}
-                {(() => {
-                  const accent = (t) => t.palette.info.main; // away color
-                  return (
-                    <Stack direction="row" alignItems="flex-start" spacing={1}>
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={game?.away?.code}
-                        sx={{
-                          minWidth: 56,
-                          justifyContent: 'center',
-                          borderColor: accent,
-                          color: accent,
-                        }}
-                      />
-                      <Box
-                        sx={{
-                          flex: 1,
-                          pl: 1.5,
-                          mt: 0.25,
-                          borderLeft: '3px solid',
-                          borderColor: accent,
-                        }}
-                      >
-                        <Stack direction="column" spacing={1} sx={{ '& > *': { maxWidth: '100%' } }}>
-                          {mini.data.away.map((p) => (
-                            <PlayerPill key={`a-${p.player_id}`} avg={p} accent={accent} />
-                          ))}
-                        </Stack>
-                      </Box>
-                    </Stack>
-                  );
-                })()}
-
-                {/* Home group */}
-                {(() => {
-                  const accent = (t) => t.palette.success.main; // home color
-                  return (
-                    <Stack direction="row" alignItems="flex-start" spacing={1}>
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={game?.home?.code}
-                        sx={{
-                          minWidth: 56,
-                          justifyContent: 'center',
-                          borderColor: accent,
-                          color: accent,
-                        }}
-                      />
-                      <Box
-                        sx={{
-                          flex: 1,
-                          pl: 1.5,
-                          mt: 0.25,
-                          borderLeft: '3px solid',
-                          borderColor: accent,
-                        }}
-                      >
-                        <Stack direction="column" spacing={1} sx={{ '& > *': { maxWidth: '100%' } }}>
-                          {mini.data.home.map((p) => (
-                            <PlayerPill key={`h-${p.player_id}`} avg={p} accent={accent} />
-                          ))}
-                        </Stack>
-                      </Box>
-                    </Stack>
-                  );
-                })()}
-              </Stack>
-            ) : null}
-          </AccordionDetails>
-        </Accordion>
+        {/* 🔁 unified content */}
+        <GameComparePanel game={game} />
       </Box>
 
       {/* sticky footer */}
@@ -1955,17 +1385,19 @@ useEffect(() => {
           position: 'sticky',
           bottom: 0,
           pt: 1.5,
-          background: (t) => `linear-gradient(180deg, ${t.palette.background.default}00, ${t.palette.background.default} 40%)`,
+          background: (t) =>
+            `linear-gradient(180deg, ${t.palette.background.default}00, ${t.palette.background.default} 40%)`,
         }}
       >
         <Tooltip title="Close">
-          <Button variant="contained" onClick={onClose} fullWidth>Close</Button>
+          <Button variant="contained" onClick={onClose} fullWidth>
+            Close
+          </Button>
         </Tooltip>
       </Box>
     </Drawer>
   );
 }
-
 
 // --- Replace the whole resultMeta with this version ---
 function isFinal(game){
