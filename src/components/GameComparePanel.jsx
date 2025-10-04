@@ -9,7 +9,7 @@ import { Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 
-// ========= small utils =========
+/* ====================== small utils ====================== */
 const nf1 = (v) => (v ?? 0).toFixed(1);
 const clampISODateOnly = (iso) => (iso || "").slice(0, 10);
 const parseMinToNumber = (minStr) => {
@@ -21,8 +21,15 @@ const bdlHeaders = () => {
   const key = process.env.REACT_APP_BDL_API_KEY;
   return key ? { Authorization: key } : {};
 };
+const isoDaysAgo = (n, from = new Date()) => {
+  const d = new Date(from); d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0,10);
+};
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
+const logit = (p) => Math.log(Math.max(1e-9, Math.min(1-1e-9, p)) / (1 - Math.max(1e-9, Math.min(1-1e-9, p))));
+const ilogit = (z) => 1 / (1 + Math.exp(-z));
 
-// ========= maps =========
+/* ====================== maps ====================== */
 const BDL_TEAM_ID = {
   ATL:1, BOS:2, BKN:3, CHA:4, CHI:5, CLE:6, DAL:7, DEN:8, DET:9,
   GSW:10, HOU:11, IND:12, LAC:13, LAL:14, MEM:15, MIA:16, MIL:17,
@@ -30,7 +37,7 @@ const BDL_TEAM_ID = {
   SAC:26, SAS:27, TOR:28, UTA:29, WAS:30
 };
 
-// ========= season windows =========
+/* ====================== season windows ====================== */
 function windowISO({ anchorISO, days }) {
   const anchor = anchorISO || new Date().toISOString().slice(0,10);
   const d = new Date(anchor); d.setDate(d.getDate() - days);
@@ -43,8 +50,14 @@ function seasonWindowUpTo(anchorISO){
   const end   = clampISODateOnly(anchorISO) || `${endYear}-06-30`;
   return { start, end, endYear };
 }
+function lastCompletedSeasonEndYear(today = new Date()){
+  // NBA seasons end in June; last completed ended this calendar year if month >= July
+  const y = today.getFullYear();
+  const m = today.getMonth(); // 0=Jan
+  return (m >= 6) ? y : (y - 1);
+}
 
-// ========= light helpers mirrored from calendar for verdict =============
+/* ====================== verdict helpers (mirrored with calendar) ====================== */
 function codeify(teamObjOrStr, fallback = '') {
   if (!teamObjOrStr) return fallback;
   if (typeof teamObjOrStr === 'string') return teamObjOrStr.toUpperCase();
@@ -81,10 +94,12 @@ function modelVerdict(game) {
   return {
     state: actual === predicted ? 'correct' : 'incorrect',
     tooltip: pct != null ? `Predicted ${predicted} (${pct}%), actual ${actual}` : `Predicted ${predicted}, actual ${actual}`,
+    label: "Model"
   };
 }
 
-// ========= BDL fetchers (recent last-10, h2h, recent player avgs) =========
+/* ====================== BDL fetchers used by the panel ====================== */
+// last-10 up to anchor (this season)
 async function fetchTeamLast10UpToBDL(teamAbbr, anchorISO){
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
@@ -128,6 +143,7 @@ async function fetchTeamLast10UpToBDL(teamAbbr, anchorISO){
   return { team: teamAbbr, games: finals };
 }
 
+// season H2H in this year window
 async function fetchHeadToHeadBDL(teamA_abbr, teamB_abbr, { start, end }){
   const teamId = BDL_TEAM_ID[teamA_abbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamA_abbr}`);
@@ -165,6 +181,7 @@ async function fetchHeadToHeadBDL(teamA_abbr, teamB_abbr, { start, end }){
   return { aWins, bWins };
 }
 
+// recent player averages (21d)
 async function fetchRecentPlayerAveragesBDL(teamAbbr, { days = 21, anchorISO = null } = {}) {
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
@@ -203,7 +220,161 @@ async function fetchRecentPlayerAveragesBDL(teamAbbr, { days = 21, anchorISO = n
   return { players: avgs.slice(0,3), window: `${start}→${end}` };
 }
 
-// ========= tiny pill =========
+/* ====================== prior edge (more accurate model) ====================== */
+// Average point differential over a season window
+async function fetchTeamSeasonPointDiffBDL(teamAbbr, seasonEndYear){
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+  const start = `${seasonEndYear-1}-10-01`;
+  const end   = `${seasonEndYear}-06-30`;
+
+  const u = new URL("https://api.balldontlie.io/v1/games");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("start_date", start);
+  u.searchParams.set("end_date", end);
+  u.searchParams.set("postseason", "false");
+  u.searchParams.set("per_page", "100");
+
+  let page = 1, gp = 0, sumMargin = 0;
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers: bdlHeaders() });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const data = Array.isArray(j?.data) ? j.data : [];
+    for (const g of data) {
+      const hs = g?.home_team_score, as = g?.visitor_team_score;
+      if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
+      const home = (g?.home_team?.abbreviation || "").toUpperCase();
+      const isHome = home === teamAbbr;
+      const my = isHome ? hs : as;
+      const opp = isHome ? as : hs;
+      gp += 1; sumMargin += (my - opp);
+    }
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+  const diff = gp ? (sumMargin / gp) : 0;
+  return { gp, diff };
+}
+
+// Tiny preseason adjustment from last 30 days
+async function fetchTinyPreseasonNudgeBDL(teamAbbr){
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) return 0;
+  const u = new URL("https://api.balldontlie.io/v1/games");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("start_date", isoDaysAgo(30));
+  u.searchParams.set("end_date", new Date().toISOString().slice(0,10));
+  u.searchParams.set("per_page", "100");
+
+  const r = await fetch(u, { headers: bdlHeaders() });
+  if (!r.ok) return 0;
+  const j = await r.json();
+  const data = Array.isArray(j?.data) ? j.data : [];
+
+  let gp = 0, sumMargin = 0;
+  for (const g of data) {
+    if (!/final/i.test(g?.status || "")) continue;
+    const hs = g?.home_team_score, as = g?.visitor_team_score;
+    if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
+    const home = (g?.home_team?.abbreviation || "").toUpperCase();
+    const isHome = home === teamAbbr;
+    const my = isHome ? hs : as;
+    const opp = isHome ? as : hs;
+    gp += 1; sumMargin += (my - opp);
+  }
+  if (!gp) return 0;
+  return (sumMargin / gp) * 0.2; // tiny weight
+}
+
+const HCA_POINTS = 2.3; // baseline home-court advantage
+const logistic = (pointAdv, scale = 6.5) => 1 / (1 + Math.exp(-Math.max(-50, Math.min(50, pointAdv/scale))));
+
+async function computePriorEdgeBDL(homeCode, awayCode){
+  const prevSeasonEnd = lastCompletedSeasonEndYear();
+  const [homePrev, awayPrev] = await Promise.all([
+    fetchTeamSeasonPointDiffBDL(homeCode, prevSeasonEnd),
+    fetchTeamSeasonPointDiffBDL(awayCode, prevSeasonEnd),
+  ]);
+  const [hPre, aPre] = await Promise.all([
+    fetchTinyPreseasonNudgeBDL(homeCode),
+    fetchTinyPreseasonNudgeBDL(awayCode),
+  ]);
+
+  const pointAdv = (homePrev.diff - awayPrev.diff) + HCA_POINTS + (hPre - aPre);
+  const pHome = logistic(pointAdv, 6.5);
+
+  return {
+    pHome,
+    factors: [
+      { label: "Last season diff (H−A)", value: `${(homePrev.diff - awayPrev.diff).toFixed(2)} pts/g` },
+      { label: "Home-court", value: `${HCA_POINTS.toFixed(1)} pts` },
+      { label: "Preseason nudge", value: `${(hPre - aPre).toFixed(2)} pts` },
+    ],
+    mode: "prior",
+    confidence: 0.25
+  };
+}
+
+/* ====================== recent-form edge + blend ====================== */
+// quick recent form pHome from W-L delta
+function computeRecentEdgeFromLast10(awayPack, homePack){
+  const away = awayPack?.games || [];
+  const home = homePack?.games || [];
+  if (!home.length || !away.length) return null;
+
+  const W = (arr)=>arr.filter(g=>g.result==='W').length;
+  const L = (arr)=>arr.filter(g=>g.result==='L').length;
+  const homeEdge = (W(home)-L(home)) - (W(away)-L(away));  // [-10..+10]
+  const pHome = 1 / (1 + Math.exp(-homeEdge/3.0));
+
+  return {
+    pHome,
+    factors: [{ label: "Recent form (H−A)", value: `${homeEdge>0?'+':''}${homeEdge}` }],
+    mode: "recent",
+    confidence: 0.6
+  };
+}
+
+/* If possible, blend prior + recent using logit blend with alpha based on games seen */
+async function computeBlendedEdge({ homeCode, awayCode, awayPack, homePack }){
+  const recent = computeRecentEdgeFromLast10(awayPack, homePack);
+  if (!recent) return null;
+
+  const prior = await computePriorEdgeBDL(homeCode, awayCode);
+
+  // number of recent games available (finals)
+  const nH = (homePack?.games || []).length;
+  const nA = (awayPack?.games || []).length;
+  const nEff = Math.min(nH, nA);
+
+  const alpha = clamp01(
+    nEff >= 5 ? 0.80 :
+    nEff === 4 ? 0.70 :
+    nEff === 3 ? 0.55 :
+    nEff === 2 ? 0.40 :
+    nEff === 1 ? 0.25 : 0.00
+  );
+
+  const z = (1 - alpha) * logit(prior.pHome) + alpha * logit(recent.pHome);
+  const pHome = ilogit(z);
+
+  const factors = [
+    ...recent.factors,
+    ...prior.factors
+  ];
+
+  return {
+    pHome,
+    factors,
+    mode: alpha >= 0.8 ? "recent" : "blend",
+    confidence: Math.max(0.25, alpha)
+  };
+}
+
+/* ====================== UI widgets ====================== */
 function initials(first = "", last = "") {
   const f = (first || "").trim(); const l = (last || "").trim();
   return `${f ? f[0] : ""}${l ? l[0] : ""}`.toUpperCase() || "•";
@@ -241,7 +412,6 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
   );
 }
 
-// ========= sub-widgets =========
 function Last10List({ title, loading, error, data }){
   const record = useMemo(()=>{
     const arr = data?.games || [];
@@ -282,11 +452,32 @@ function Last10List({ title, loading, error, data }){
   );
 }
 
-function ProbabilityCard({ game, edge }) {
-  // verdict works from either explicit predictedWinner or pHome + final score
-  const verdict = modelVerdict(game);
+/* Verdict that can fall back to the computed edge when model pick is missing */
+function panelVerdict(game, edge){
+  const mv = modelVerdict(game);
+  if (mv) return mv; // use model verdict if available
 
-  // choose probability: prefer model.pHome, otherwise the recent-form edge
+  const isFinal = (game?.status || '').toLowerCase().includes('final');
+  if (!isFinal || !edge || !Number.isFinite(edge.pHome)) return null;
+
+  const home = codeify(game?.home, 'HOME');
+  const away = codeify(game?.away, 'AWAY');
+  const predicted = edge.pHome > 0.5 ? home : away;
+  const actual = getActualWinnerCode(game);
+  if (!actual || actual === 'TIE') return null;
+
+  const pct = Math.round(edge.pHome * 100);
+  return {
+    state: actual === predicted ? 'correct' : 'incorrect',
+    tooltip: `Edge predicted ${predicted} (${pct}%), actual ${actual}`,
+    label: "Edge"
+  };
+}
+
+function ProbabilityCard({ game, edge }) {
+  const verdict = panelVerdict(game, edge);
+
+  // choose probability: prefer model.pHome, otherwise the blended/ recent edge
   const pModel = Number(game?.model?.pHome);
   const hasModelProb = Number.isFinite(pModel);
   const pFromEdge = Number(edge?.pHome);
@@ -296,11 +487,14 @@ function ProbabilityCard({ game, edge }) {
   const hasProb = Number.isFinite(pHome);
   const pct = hasProb ? Math.round(pHome * 100) : null;
 
-  // If we have neither prob nor verdict, render nothing.
   if (!hasProb && !verdict) return null;
 
   const homeCode = game?.home?.code;
   const awayCode = game?.away?.code;
+
+  const modeHint = hasModelProb
+    ? "model prob"
+    : (edge?.mode || "recent");
 
   return (
     <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
@@ -315,14 +509,12 @@ function ProbabilityCard({ game, edge }) {
                 (home win)
               </Typography>
             )}
-            {!hasModelProb && hasEdgeProb && (
+            <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
+              {modeHint}
+            </Typography>
+            {Number.isFinite(edge?.confidence) && (
               <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
-                recent form
-              </Typography>
-            )}
-            {hasModelProb && (
-              <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
-                model prob
+                conf ~{Math.round(edge.confidence*100)}%
               </Typography>
             )}
           </Stack>
@@ -331,18 +523,18 @@ function ProbabilityCard({ game, edge }) {
             ? (
               <Tooltip title={verdict.tooltip}>
                 <Chip size="small" color="success" variant="outlined"
-                      icon={<CheckCircleIcon fontSize="small" />} label="Model" />
+                      icon={<CheckCircleIcon fontSize="small" />} label={verdict.label} />
               </Tooltip>
             ) : (
               <Tooltip title={verdict.tooltip}>
                 <Chip size="small" color="error" variant="outlined"
-                      icon={<CancelIcon fontSize="small" />} label="Model" />
+                      icon={<CancelIcon fontSize="small" />} label={verdict.label} />
               </Tooltip>
             )
           )}
         </Stack>
 
-        {/* With probability -> show number + bar. Without -> show plain pick label */}
+        {/* With probability -> show number + bar. Without -> simple pick line */}
         {hasProb ? (
           <>
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
@@ -351,21 +543,20 @@ function ProbabilityCard({ game, edge }) {
                 {homeCode} vs {awayCode}
               </Typography>
             </Stack>
-
             <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
               <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
             </Box>
           </>
         ) : (
-          <Typography variant="body2" sx={{ mt:1, opacity:0.8 }}>
+          <Typography variant="body2" sx={{ mt:1, opacity:0.85 }}>
             Model pick: <strong>{getPredictedWinnerCode(game) || '—'}</strong>
           </Typography>
         )}
 
-        {/* factors (only if we’re using the recent-form edge or have edge factors) */}
+        {/* Factors */}
         {(edge?.factors?.length) ? (
           <List dense sx={{ mt:1 }}>
-            {edge.factors.slice(0,3).map((f,i)=>(
+            {edge.factors.slice(0,4).map((f,i)=>(
               <ListItem key={i} disableGutters sx={{ py:0.25 }}>
                 <ListItemText primaryTypographyProps={{ variant:'body2' }}
                               primary={`${f.label}: ${f.value}`} />
@@ -378,7 +569,7 @@ function ProbabilityCard({ game, edge }) {
   );
 }
 
-function NarrativeBlock({ game, a, b, h2h, mini, miniModeLabel = "last 21 days" }) {
+function NarrativeBlock({ game, a, b, h2h }) {
   if (!game) return null;
   const status = String(game?.status || "");
   const isFinal = /final/i.test(status);
@@ -418,33 +609,7 @@ function NarrativeBlock({ game, a, b, h2h, mini, miniModeLabel = "last 21 days" 
   );
 }
 
-// ---- recent-form edge from the two last-10 lists ----
-function computeRecentEdge(aData, bData) {
-  // aData = away last-10 pack, bData = home last-10 pack
-  const away = aData?.games || [];
-  const home = bData?.games || [];
-  if (!home.length || !away.length) return null;
-
-  const W = (arr)=>arr.filter(g=>g.result==='W').length;
-  const L = (arr)=>arr.filter(g=>g.result==='L').length;
-
-  // "homeEdge" = (home W-L) - (away W-L), in [-10..+10]
-  const homeEdge = (W(home)-L(home)) - (W(away)-L(away));
-
-  // map to probability with a gentle logistic; scale tunes sharpness
-  const scale = 3.0;
-  const pHome = 1 / (1 + Math.exp(-homeEdge/scale));
-
-  // build simple factors
-  const f = [
-    { label: 'Recent form (H−A)', value: `${homeEdge > 0 ? '+' : ''}${homeEdge}` },
-    { label: 'Home-court', value: '+ ~2–3 pts' },
-  ];
-  return { pHome, factors: f };
-}
-
-
-// ========= main shared panel =========
+/* ====================== main shared panel ====================== */
 export default function GameComparePanel({ game }) {
   const [a, setA] = useState({ loading: true, error: null, data: null }); // away last-10
   const [b, setB] = useState({ loading: true, error: null, data: null }); // home last-10
@@ -452,9 +617,10 @@ export default function GameComparePanel({ game }) {
   const [mini, setMini] = useState({ loading: true, error: null, data: null });
   const [miniModeLabel, setMiniModeLabel] = useState("last 21 days");
 
-  const anchorISO = (game?._iso || "").slice(0,10) || (game?.dateKey || new Date().toISOString().slice(0,10));
-
+  // blended / recent model edge shown in the card
   const [edge, setEdge] = useState(null);
+
+  const anchorISO = (game?._iso || "").slice(0,10) || (game?.dateKey || new Date().toISOString().slice(0,10));
 
   // last-10 (this season up to anchor)
   useEffect(()=>{ let cancelled=false; (async()=>{
@@ -476,15 +642,6 @@ export default function GameComparePanel({ game }) {
       setB({loading:false,error:msg,data:{ games: [] }});
     }
   })(); return ()=>{cancelled=true}; }, [game?.home?.code, game?.away?.code, anchorISO]);
-
-    // when last-10 lists are ready, compute a lightweight edge
-    useEffect(() => {
-    if (!a.loading && !b.loading && !a.error && !b.error && a.data && b.data) {
-        setEdge(computeRecentEdge(a.data, b.data));
-    } else {
-        setEdge(null);
-    }
-    }, [a.loading, b.loading, a.error, b.error, a.data, b.data]);
 
   // h2h (this season)
   useEffect(()=>{ let cancelled=false; (async()=>{
@@ -518,10 +675,26 @@ export default function GameComparePanel({ game }) {
     }
   })(); return ()=>{cancelled=true}; }, [game?.home?.code, game?.away?.code, anchorISO]);
 
+  // compute the edge (blend prior + recent) when last-10 ready
+  useEffect(() => { let stop=false; (async()=>{
+    if (a.loading || b.loading || a.error || b.error || !a.data || !b.data) { setEdge(null); return; }
+    try {
+      const blended = await computeBlendedEdge({
+        homeCode: game?.home?.code,
+        awayCode: game?.away?.code,
+        awayPack: a.data,
+        homePack: b.data
+      });
+      if (!stop) setEdge(blended || computeRecentEdgeFromLast10(a.data, b.data));
+    } catch {
+      if (!stop) setEdge(computeRecentEdgeFromLast10(a.data, b.data));
+    }
+  })(); return ()=>{ stop=true; }; }, [a.loading, b.loading, a.error, b.error, a.data, b.data, game?.home?.code, game?.away?.code]);
+
   return (
     <Box sx={{ flex: 1, minHeight: 0 }}>
       {/* Narrative */}
-      <NarrativeBlock game={game} a={a} b={b} h2h={h2h} mini={mini} miniModeLabel={miniModeLabel} />
+      <NarrativeBlock game={game} a={a} b={b} h2h={h2h} />
 
       <Divider sx={{ my: 1 }} />
 
@@ -535,7 +708,7 @@ export default function GameComparePanel({ game }) {
         Showing last 10 this season up to {anchorISO}
       </Typography>
 
-      {/* Probability (simple) */}
+      {/* Probability (model/edge) */}
       <ProbabilityCard game={game} edge={edge} />
 
       {/* H2H */}
