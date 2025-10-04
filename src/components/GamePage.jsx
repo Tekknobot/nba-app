@@ -161,18 +161,26 @@ function h2hAfterIncludingCurrent(h2h, game) {
 // Roster → player ids → season_averages (fallback to 21-day stats)
 async function fetchTeamLeaders(teamCode, dateISO) {
   const { endYear } = seasonWindowFromISO(dateISO);
-
   const rosterQs = new URLSearchParams({ "team_ids[]": homeCodeToId(teamCode), per_page: "100" }).toString();
   const roster = await withRetry(() => fetchJsonViaGateway(`players?${rosterQs}`)).catch(() => null);
   const ids = Array.from(new Set((roster || []).map(p => p?.id).filter(Number))).slice(0, 30);
   if (!ids.length) return null;
 
-  // Try season averages first
-  const saQs = new URLSearchParams({ season: String(endYear) });
-  ids.forEach(id => saQs.append("player_ids[]", String(id)));
-  let avgs = await withRetry(() => fetchJsonViaGateway(`season_averages?${saQs.toString()}`)).catch(() => null);
+  async function getSeasonAverages(seasonYear) {
+    const saQs = new URLSearchParams({ season: String(seasonYear) });
+    ids.forEach(id => saQs.append("player_ids[]", String(id)));
+    return await withRetry(() => fetchJsonViaGateway(`season_averages?${saQs.toString()}`)).catch(() => null);
+  }
 
-  // Fallback: recent 21-day stats -> compute per-game
+  // 1) Try current season
+  let avgs = await getSeasonAverages(endYear);
+
+  // 2) If empty, try previous season (useful for early season/past games)
+  if (!Array.isArray(avgs) || avgs.length === 0) {
+    avgs = await getSeasonAverages(endYear - 1);
+  }
+
+  // 3) If still empty, fallback to 21-day stats around anchor date
   if (!Array.isArray(avgs) || avgs.length === 0) {
     const anchor = dateISO ? new Date(dateISO) : new Date();
     const endStr = anchor.toISOString().slice(0,10);
@@ -285,7 +293,6 @@ async function fetchLast10Record(teamCode, dateISO) {
   return `${w}-${l}${t ? `-${t}` : ""}`;
 }
 
-
 /* ---------------- component ---------------- */
 export default function GamePage() {
   const { id } = useParams();
@@ -324,21 +331,21 @@ export default function GamePage() {
     (async () => {
       try {
         const [hh, lh, la, fh, fa] = await Promise.all([
-          withRetry(() => fetchHeadToHead(game.home.code, game.away.code, game.dateISO))
-            .catch(() => ({ homeWins: 0, awayWins: 0 })),  // soft fallback
-          sleep(60).then(() =>
-            withRetry(() => fetchTeamLeaders(game.home.code, game.dateISO)).catch(() => null)
-          ),
-          sleep(120).then(() =>
-            withRetry(() => fetchTeamLeaders(game.away.code, game.dateISO)).catch(() => null)
-          ),
-          sleep(180).then(() =>
-            withRetry(() => fetchLast10Record(game.home.code, game.dateISO)).catch(() => "0-0")
-          ),
-          sleep(240).then(() =>
-            withRetry(() => fetchLast10Record(game.away.code, game.dateISO)).catch(() => "0-0")
-          ),
-        ]);
+            withRetry(() => fetchHeadToHead(game.home.code, game.away.code, game.dateISO))
+              .catch(() => ({ homeWins: 0, awayWins: 0 })), // soft fallback
+            sleep(60).then(() =>
+              withRetry(() => fetchTeamLeaders(game.home.code, game.dateISO)).catch(() => null)
+            ),
+            sleep(120).then(() =>
+              withRetry(() => fetchTeamLeaders(game.away.code, game.dateISO)).catch(() => null)
+            ),
+            sleep(180).then(() =>
+              withRetry(() => fetchLast10Record(game.home.code, game.dateISO)).catch(() => "0-0")
+            ),
+            sleep(240).then(() =>
+              withRetry(() => fetchLast10Record(game.away.code, game.dateISO)).catch(() => "0-0")
+            ),
+          ]);
         if (!ok) return;
         setH2h(hh);
         setLeadersHome(lh);
