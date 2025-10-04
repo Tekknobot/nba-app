@@ -109,6 +109,49 @@ function modelVerdict(game) {
   };
 }
 
+// --- roster by team (players -> ids) ---
+async function fetchTeamRosterByTeamIdBDL(teamAbbr, { perPage = 100 } = {}) {
+  const teamId = BDL_TEAM_ID[teamAbbr];
+  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+  const headers = bdlHeaders();
+  let page = 1, out = [];
+  const u = new URL("https://api.balldontlie.io/v1/players");
+  u.searchParams.set("team_ids[]", String(teamId));
+  u.searchParams.set("per_page", String(perPage));
+  while (true) {
+    u.searchParams.set("page", String(page));
+    const r = await fetch(u, { headers });
+    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+    const j = await r.json();
+    const arr = Array.isArray(j?.data) ? j.data : [];
+    out.push(...arr);
+    if (!j?.meta?.next_page) break;
+    page = j.meta.next_page;
+  }
+  return out; // array of players with .id
+}
+
+// --- season averages batch for a set of player ids ---
+async function fetchSeasonAveragesBatchBDL(playerIds, seasonEndYear) {
+  if (!playerIds?.length) return [];
+  const u = new URL("https://api.balldontlie.io/v1/season_averages");
+  u.searchParams.set("season", String(seasonEndYear));
+  for (const id of playerIds) u.searchParams.append("player_ids[]", String(id));
+  const r = await fetch(u, { headers: bdlHeaders() });
+  if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+  if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+  const j = await r.json();
+  return Array.isArray(j?.data) ? j.data : [];
+}
+
+// --- pick the “season end year” for a given anchor date ---
+function seasonEndYearFrom(anchorISO) {
+  const d = anchorISO ? new Date(anchorISO) : new Date();
+  const m = d.getMonth(); // 0..11
+  return (m >= 9) ? d.getFullYear() + 1 : d.getFullYear();
+}
+
 /* ====================== hydrate final scores when missing ====================== */
 async function fetchGameByIdBDL(gameId){
   if (!gameId) throw new Error("Missing game id");
@@ -205,42 +248,130 @@ async function fetchHeadToHeadBDL(teamA_abbr, teamB_abbr, { start, end }){
   return { aWins, bWins };
 }
 
-async function fetchRecentPlayerAveragesBDL(teamAbbr, { days = 21, anchorISO = null } = {}) {
+async function fetchRecentPlayerAveragesBDL(teamAbbr, {
+  days = 21, anchorISO = null,
+} = {}) {
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
+
   const { start, end } = windowISO({ anchorISO, days });
-  const u = new URL("https://api.balldontlie.io/v1/stats");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start);
-  u.searchParams.set("end_date", end);
-  u.searchParams.set("postseason", "false");
-  u.searchParams.set("per_page", "100");
-  let page=1, rows=[];
-  while(true){
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers: bdlHeaders() });
-    if (!r.ok) throw new Error(`BDL ${r.status}`);
-    const j = await r.json();
-    rows.push(...(j?.data||[]));
-    if (!j?.meta?.next_page) break;
-    page=j.meta.next_page;
+
+  // Try recent window first
+  try {
+    const u = new URL("https://api.balldontlie.io/v1/stats");
+    u.searchParams.set("team_ids[]", String(teamId));
+    u.searchParams.set("start_date", start);
+    u.searchParams.set("end_date", end);
+    u.searchParams.set("postseason", "false");
+    u.searchParams.set("per_page", "100");
+
+    const headers = bdlHeaders();
+    let page = 1, rows = [];
+    while (true) {
+      u.searchParams.set("page", String(page));
+      const r = await fetch(u, { headers });
+      if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
+      if (r.status === 402 || r.status === 403) throw new Error("tier_block");
+      if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
+      const j = await r.json();
+      const data = Array.isArray(j?.data) ? j.data : [];
+      rows.push(...data);
+      if (!j?.meta?.next_page) break;
+      page = j.meta.next_page;
+    }
+
+    // ❗ filter by the stat row team abbreviation to keep only THIS team's players
+    const filtered = rows.filter(s =>
+      (s?.team?.abbreviation || s?.team_abbreviation || "").toUpperCase() === teamAbbr
+    );
+
+    // Aggregate per player
+    const byPlayer = new Map();
+    for (const s of filtered) {
+      const pid = Number(s?.player?.id ?? s?.player_id);
+      if (!Number.isFinite(pid)) continue;
+      if (!byPlayer.has(pid)) {
+        byPlayer.set(pid, {
+          player_id: pid,
+          player: s.player || null,
+          gp: 0, min: 0, pts: 0, reb: 0, ast: 0,
+        });
+      }
+      const p = byPlayer.get(pid);
+      p.gp += 1;
+      const minStr = String(s?.min || s?.minutes || "0:00");
+      const [mm, ss] = minStr.split(":").map(Number);
+      const mins = (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
+      p.min += mins;
+      p.pts += Number(s?.pts || 0);
+      p.reb += Number(s?.reb || 0);
+      p.ast += Number(s?.ast || 0);
+    }
+
+    let players = Array.from(byPlayer.values()).map(p => ({
+      player_id: p.player_id,
+      player: p.player,
+      min: `${Math.floor((p.min / p.gp) || 0)}:${String(Math.round((((p.min / p.gp) % 1) * 60)) || 0).padStart(2, '0')}`,
+      pts: (p.pts / p.gp) || 0,
+      reb: (p.reb / p.gp) || 0,
+      ast: (p.ast / p.gp) || 0,
+    }));
+
+    // Rank by minutes, then points
+    players.sort((a, b) => {
+      const minToNum = (m) => {
+        const [mm, ss] = String(m || "0:00").split(":").map(Number);
+        return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
+      };
+      const bm = minToNum(b.min), am = minToNum(a.min);
+      if (bm !== am) return bm - am;
+      return (b.pts || 0) - (a.pts || 0);
+    });
+
+    // If we got enough players (or at least some), return recent
+    if (players.length >= 3) return { players, _mode: "recent" };
+    if (players.length > 0) return { players, _mode: "recent" }; // still acceptable
+  } catch (e) {
+    // fall through to season fallback
   }
-  const by = new Map();
-  for(const s of rows){
-    const pid = Number(s?.player?.id ?? s?.player_id); if(!Number.isFinite(pid)) continue;
-    if(!by.has(pid)) by.set(pid,{ player_id:pid, player:s.player||null, gp:0, min:0, pts:0, reb:0, ast:0 });
-    const p = by.get(pid);
-    p.gp += 1;
-    p.min += parseMinToNumber(String(s?.min || s?.minutes || "0:00"));
-    p.pts += +s.pts||0; p.reb += +s.reb||0; p.ast += +s.ast||0;
+
+  // Fallback: season averages via roster → season_averages
+  const roster = await fetchTeamRosterByTeamIdBDL(teamAbbr).catch(() => []);
+  const ids = Array.from(new Set((roster || []).map(p => Number(p?.id)).filter(Boolean))).slice(0, 30);
+  const season = seasonEndYearFrom(anchorISO);
+  let avgs = await fetchSeasonAveragesBatchBDL(ids, season);
+  let usedSeason = season;
+
+  // If current season blank (early Oct), try previous season
+  if (!avgs?.length) {
+    avgs = await fetchSeasonAveragesBatchBDL(ids, season - 1);
+    usedSeason = season - 1;
   }
-  const avgs = Array.from(by.values()).map(p=>({
-    player_id:p.player_id, player:p.player,
-    min: `${Math.floor((p.min/p.gp)||0)}:${String(Math.round((((p.min/p.gp)%1)*60))||0).padStart(2,'0')}`,
-    pts:(p.pts/p.gp)||0, reb:(p.reb/p.gp)||0, ast:(p.ast/p.gp)||0
-  }));
-  avgs.sort((a,b)=> parseMinToNumber(b.min)-parseMinToNumber(a.min) || (b.pts||0)-(a.pts||0));
-  return { players: avgs.slice(0,3), window: `${start}→${end}` };
+
+  // Attach names from roster & pick top by minutes (or pts if minutes missing)
+  const byId = new Map((roster || []).map(p => [Number(p?.id), p]));
+  const minToNum = (m) => {
+    const [mm, ss] = String(m || "0:00").split(":").map(Number);
+    return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
+  };
+
+  const players = (avgs || []).map(a => ({
+    player_id: a.player_id,
+    player: byId.get(Number(a.player_id)) || null,
+    // season averages object uses 'min' minutes per game string, if not present we synthesize
+    min: a.min || (a?.mpg ? a.mpg : "0:00"),
+    pts: a.pts || 0,
+    reb: a.reb || 0,
+    ast: a.ast || 0,
+  }))
+  .sort((x, y) => {
+    const ym = minToNum(y.min), xm = minToNum(x.min);
+    if (ym !== xm) return ym - xm;
+    return (y.pts || 0) - (x.pts || 0);
+  })
+  .slice(0, 3);
+
+  return { players, _mode: "season-fallback", _season: usedSeason };
 }
 
 /* ====================== prior edge (more accurate model) ====================== */
@@ -707,23 +838,41 @@ export default function GameComparePanel({ game }) {
     }
   })(); return ()=>{cancelled=true}; }, [game?.home?.code, game?.away?.code, anchorISO]);
 
-  // mini player avgs (recent, soft-fail)
-  useEffect(()=>{ let cancelled=false; (async()=>{
-    try{
-      setMini({loading:true,error:null,data:null});
-      const [awayRecent, homeRecent] = await Promise.all([
-        fetchRecentPlayerAveragesBDL(game.away.code, { days: 21, anchorISO }),
-        fetchRecentPlayerAveragesBDL(game.home.code, { days: 21, anchorISO }),
-      ]);
-      if (cancelled) return;
-      setMini({ loading:false, error:null, data: { away: awayRecent.players, home: homeRecent.players }});
-      setMiniModeLabel("last 21 days");
-    }catch(e){
-      if (cancelled) return;
-      setMini({ loading:false, error:"Recent player stats unavailable on your key/tier.", data:null });
-      setMiniModeLabel("players unavailable");
-    }
-  })(); return ()=>{cancelled=true}; }, [game?.home?.code, game?.away?.code, anchorISO]);
+    // ------------------ Rolling recent player averages (with season fallback) ------------------
+    useEffect(() => {
+    if (!game?.home?.code || !game?.away?.code) return;
+    let cancelled = false;
+
+    (async () => {
+        try {
+        setMini({ loading: true, error: null, data: null });
+        const [awayPack, homePack] = await Promise.all([
+            fetchRecentPlayerAveragesBDL(game.away.code, { days: 21, anchorISO }),
+            fetchRecentPlayerAveragesBDL(game.home.code, { days: 21, anchorISO }),
+        ]);
+        if (cancelled) return;
+
+        setMini({
+            loading: false,
+            error: null,
+            data: { away: awayPack.players || [], home: homePack.players || [] },
+        });
+
+        const mode =
+            awayPack._mode === "season-fallback" || homePack._mode === "season-fallback"
+            ? "season-fallback"
+            : "recent";
+
+        setMiniModeLabel(mode === "recent" ? "last 21 days" : "season averages (fallback)");
+        } catch (e) {
+        if (cancelled) return;
+        setMini({ loading: false, error: e?.message || String(e), data: null });
+        setMiniModeLabel("players unavailable");
+        }
+    })();
+
+    return () => { cancelled = true; };
+    }, [game?.home?.code, game?.away?.code, anchorISO]);
 
   // compute the edge (blend prior + recent) when last-10 ready
   useEffect(() => { let stop=false; (async()=>{
