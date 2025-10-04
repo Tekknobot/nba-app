@@ -571,18 +571,11 @@ export default function AllGamesCalendar(){
           <Typography component="h1" variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
             NBA Calendar & Matchup Helper
           </Typography>
-          <Card variant="outlined" sx={{ borderRadius: 1, mb: 2 }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography component="h1" variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-                NBA Calendar & Matchup Helper
-              </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                Browse the NBA schedule month by month, tap on any game to see both teams’ recent
-                form, a light win probability estimate (“Model edge”), and quick matchup notes.
-                It’s built to be clean, mobile-friendly, and fun to explore.
-              </Typography>
-            </CardContent>
-          </Card>
+          <Typography variant="body2" sx={{ opacity: 0.9 }}>
+            Browse the NBA schedule month by month, tap on any game to see both teams’ recent
+            form, a light win probability estimate (“Model edge”), and quick matchup notes.
+            It’s built to be clean, mobile-friendly, and fun to explore — not a betting tool.
+          </Typography>
         </CardContent>
       </Card>
 
