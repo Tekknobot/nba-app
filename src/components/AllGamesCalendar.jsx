@@ -577,7 +577,7 @@ export default function AllGamesCalendar(){
           <Typography variant="body2" sx={{ opacity: 0.9 }}>
             Browse the NBA schedule month by month, tap on any game to see both teams’ recent
             form, a light win probability estimate (“Model edge”), and quick matchup notes.
-            It’s built to be clean, mobile-friendly, and fun to explore — not a betting tool.
+            It’s built to be clean, mobile-friendly, and fun to explore.
           </Typography>
         </CardContent>
       </Card>
