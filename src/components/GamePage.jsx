@@ -106,33 +106,56 @@ function seasonWindowFromISO(iso) {
 const BDL_TEAM_ID = { ATL:1,BOS:2,BKN:3,CHA:4,CHI:5,CLE:6,DAL:7,DEN:8,DET:9,GSW:10,HOU:11,IND:12,LAC:13,LAL:14,MEM:15,MIA:16,MIL:17,MIN:18,NOP:19,NYK:20,OKC:21,ORL:22,PHI:23,PHX:24,POR:25,SAC:26,SAS:27,TOR:28,UTA:29,WAS:30 };
 function homeCodeToId(code){ const id = BDL_TEAM_ID[(code||"").toUpperCase()]; if (!id) throw new Error(`Unknown team code: ${code}`); return String(id); }
 
-// Head-to-head this season (wins for HOME vs AWAY)
+// Head-to-head this season (wins for HOME vs AWAY), includes games where either team was home.
+// Soft-fails to [] so the UI shows “First meeting …” instead of “unavailable”.
 async function fetchHeadToHead(homeCode, awayCode, dateISO) {
   const { start, end } = seasonWindowFromISO(dateISO);
+
+  // Pull games for BOTH teams in the season window
   const qs = new URLSearchParams({
-    "team_ids[]": homeCodeToId(homeCode),
     start_date: start,
     end_date: end,
     per_page: "100",
-  }).toString();
+  });
+  qs.append("team_ids[]", homeCodeToId(homeCode));
+  qs.append("team_ids[]", homeCodeToId(awayCode));
 
-  // Soft-fail to empty list so UI shows “First meeting …” instead of “unavailable”
-  const data = await withRetry(() => fetchJsonViaGateway(`games?${qs}`)).catch(() => []);
+  const data = await fetchJsonViaGateway(`games?${qs.toString()}`).catch(() => []);
+  const seen = new Set();
 
   let homeWins = 0, awayWins = 0;
   for (const g of data || []) {
+    if (!g?.id || seen.has(g.id)) continue;
+    seen.add(g.id);
+
     const hs = g?.home_team_score, as = g?.visitor_team_score;
     if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
+
     const h = (g?.home_team?.abbreviation || "").toUpperCase();
     const v = (g?.visitor_team?.abbreviation || "").toUpperCase();
     const involves = (h === homeCode && v === awayCode) || (h === awayCode && v === homeCode);
     if (!involves) continue;
+
+    // Count from the perspective of the page's HOME team code
     const homeTeamIsH = h === homeCode;
     const homeScore   = homeTeamIsH ? hs : as;
     const awayScore   = homeTeamIsH ? as : hs;
-    if (homeScore > awayScore) homeWins++; else if (awayScore > homeScore) awayWins++;
+
+    if (homeScore > awayScore) homeWins++;
+    else if (awayScore > homeScore) awayWins++;
   }
   return { homeWins, awayWins };
+}
+
+function h2hAfterIncludingCurrent(h2h, game) {
+  if (!h2h || !game) return h2h;
+  const res = { ...h2h };
+  const hs = game.home?.score;
+  const as = game.away?.score;
+  if (!Number.isFinite(hs) || !Number.isFinite(as)) return res;
+  if (hs > as) res.homeWins += 1;
+  else if (as > hs) res.awayWins += 1;
+  return res;
 }
 
 // Roster → player ids → season_averages (fallback to 21-day stats)
@@ -213,25 +236,55 @@ async function fetchLast10Record(teamCode, dateISO) {
     per_page: "100"
   }).toString();
 
-  const data = await withRetry(() => fetchJsonViaGateway(`games?${qs}`)).catch(() => []);
-  // keep finals up to anchor date, newest first
-  const finals = (data||[])
-    .filter(g => /final/i.test(g?.status||""))
-    .filter(g => (g?.date||"").slice(0,10) <= (dateISO||"").slice(0,10))
-    .sort((a,b)=> new Date(b.date)-new Date(a.date))
+  // Primary attempt: finals up to anchor date, newest first
+  const data = await fetchJsonViaGateway(`games?${qs}`).catch(() => []);
+  let finals = (data || [])
+    .filter(g => /final/i.test(g?.status || ""))
+    .filter(g => (g?.date || "").slice(0, 10) <= (dateISO || "").slice(0, 10))
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
     .slice(0, 10);
 
-  let w=0,l=0,t=0;
+  // Fallback A: ignore anchor cutoff, just take most recent finals this season
+  if (finals.length === 0 && Array.isArray(data)) {
+    finals = data
+      .filter(g => /final/i.test(g?.status || ""))
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 10);
+  }
+
+  // Fallback B: previous season window if still empty (early season / preseason edge)
+  if (finals.length === 0) {
+    const d = dateISO ? new Date(dateISO) : new Date();
+    const endYear = d.getMonth() >= 9 ? d.getFullYear() + 1 : d.getFullYear();
+    const prevEndYear = endYear - 1;
+    const prevStart = `${prevEndYear - 1}-10-01`;
+    const prevEnd   = `${prevEndYear}-06-30`;
+    const qs2 = new URLSearchParams({
+      "team_ids[]": homeCodeToId(teamCode),
+      start_date: prevStart,
+      end_date: prevEnd,
+      postseason: "false",
+      per_page: "100"
+    }).toString();
+    const data2 = await fetchJsonViaGateway(`games?${qs2}`).catch(() => []);
+    finals = (data2 || [])
+      .filter(g => /final/i.test(g?.status || ""))
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 10);
+  }
+
+  let w = 0, l = 0, t = 0;
   for (const g of finals) {
-    const homeAbbr = (g.home_team?.abbreviation||"").toUpperCase();
+    const homeAbbr = (g.home_team?.abbreviation || "").toUpperCase();
     const hs = g.home_team_score, as = g.visitor_team_score;
-    const mine = homeAbbr === teamCode ? hs : as;
+    const mine   = homeAbbr === teamCode ? hs : as;
     const theirs = homeAbbr === teamCode ? as : hs;
-    if (!Number.isFinite(mine)||!Number.isFinite(theirs)) continue;
+    if (!Number.isFinite(mine) || !Number.isFinite(theirs)) continue;
     if (mine > theirs) w++; else if (mine < theirs) l++; else t++;
   }
-  return `${w}-${l}${t?`-${t}`:""}`;
+  return `${w}-${l}${t ? `-${t}` : ""}`;
 }
+
 
 /* ---------------- component ---------------- */
 export default function GamePage() {
@@ -336,6 +389,7 @@ export default function GamePage() {
   const title = `${game.away.code} @ ${game.home.code}`;
   const status = (game.status || "").toLowerCase();
   const isFinal = /final/.test(status);
+  const h2hPost = isFinal && h2h ? h2hAfterIncludingCurrent(h2h, game) : h2h;
   const friendlyStatus =
     /final/.test(status) ? "Final" :
     /in progress|halftime|end of|quarter|q\d/.test(status) ? game.status : "Scheduled";
@@ -406,11 +460,11 @@ export default function GamePage() {
             </Typography>
           )}
 
-          {isFinal && h2h && (
+            {isFinal && h2h && (
             <Typography variant="caption" sx={{ display:'block', mt: 0.25, mb: 1, opacity: 0.8 }}>
-              After this result, the season series is {game.home.code} {h2h.homeWins}–{h2h.awayWins} {game.away.code}.
+                After this result, the season series is {game.home.code} {h2hPost.homeWins}–{h2hPost.awayWins} {game.away.code}.
             </Typography>
-          )}
+            )}
 
           {/* Recent form */}
           {formHome && formAway && (
