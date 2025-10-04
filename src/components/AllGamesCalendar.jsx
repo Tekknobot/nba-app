@@ -558,6 +558,20 @@ export default function AllGamesCalendar(){
 
   return (
     <Box sx={{ mx:'auto', width:'100%', maxWidth: 720, px:{ xs:1, sm:1.5 }, py:1.5 }}>
+      {/* 👇 Intro/Explainer card goes here */}
+      <Card variant="outlined" sx={{ borderRadius: 1, mb: 2 }}>
+        <CardContent sx={{ p: 2 }}>
+          <Typography component="h1" variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
+            NBA Calendar & Matchup Helper
+          </Typography>
+          <Typography variant="body2" sx={{ opacity: 0.9 }}>
+            Browse the NBA schedule month by month, tap on any game to see both teams’ recent
+            form, a light win probability estimate (“Model edge”), and quick matchup notes.
+            It’s built to be clean, mobile-friendly, and fun to explore — not a betting tool.
+          </Typography>
+        </CardContent>
+      </Card>
+
       {/* header */}
       <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px:1.5 }}>
@@ -581,20 +595,6 @@ export default function AllGamesCalendar(){
           </Stack>
         </Stack>
       </Box>
-
-      {/* 👇 Intro/Explainer card goes here */}
-      <Card variant="outlined" sx={{ borderRadius: 1, mb: 2 }}>
-        <CardContent sx={{ p: 2 }}>
-          <Typography component="h1" variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-            NBA Calendar & Matchup Helper
-          </Typography>
-          <Typography variant="body2" sx={{ opacity: 0.9 }}>
-            Browse the NBA schedule month by month, tap on any game to see both teams’ recent
-            form, a light win probability estimate (“Model edge”), and quick matchup notes.
-            It’s built to be clean, mobile-friendly, and fun to explore — not a betting tool.
-          </Typography>
-        </CardContent>
-      </Card>
 
       {/* Offseason / empty-month fallback (always real content for AdSense) */}
       {!loading && !monthHasGames && (
@@ -631,7 +631,7 @@ export default function AllGamesCalendar(){
           </CardContent>
         </Card>
       )}
-      
+
       {/* day strip */}
       <Box ref={stripRef} sx={{ display:'flex', gap:1, overflowX:'auto', pb:1, "&::-webkit-scrollbar": { display:'none' } }}>
         {monthDays.map((d, idx)=>{
