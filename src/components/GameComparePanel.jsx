@@ -283,34 +283,70 @@ function Last10List({ title, loading, error, data }){
 }
 
 function ProbabilityCard({ game }) {
-  // display as a simple bar using pHome if present; we keep factors minimal
-  const pHome = Number(game?.model?.pHome);
-  if (!Number.isFinite(pHome)) return null;
-  const pct = Math.round(pHome * 100);
+  // verdict works from either explicit predictedWinner or pHome + final score
   const verdict = modelVerdict(game);
+
+  // We still show the percent/bar if pHome exists; otherwise we show a simple pick line.
+  const pHome = Number(game?.model?.pHome);
+  const hasProb = Number.isFinite(pHome);
+  const pct = hasProb ? Math.round(pHome * 100) : null;
+
+  // If we have neither prob nor verdict, render nothing.
+  if (!hasProb && !verdict) return null;
+
+  // for a tiny helper label when we only have a pick
+  const homeCode = game?.home?.code;
+  const awayCode = game?.away?.code;
 
   return (
     <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
       <CardContent sx={{ p:2 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between">
           <Stack direction="row" alignItems="baseline" spacing={1}>
-            <Typography variant="subtitle2" sx={{ fontWeight:700 }}>Model edge</Typography>
-            <Typography variant="caption" sx={{ opacity:0.7 }}>(home win)</Typography>
+            <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
+              Model edge
+            </Typography>
+            {hasProb && (
+              <Typography variant="caption" sx={{ opacity:0.7 }}>
+                (home win)
+              </Typography>
+            )}
           </Stack>
+
           {verdict && (verdict.state === 'correct'
-            ? <Tooltip title={verdict.tooltip}><Chip size="small" color="success" variant="outlined" icon={<CheckCircleIcon fontSize="small" />} label="Model" /></Tooltip>
-            : <Tooltip title={verdict.tooltip}><Chip size="small" color="error" variant="outlined" icon={<CancelIcon fontSize="small" />} label="Model" /></Tooltip>
+            ? (
+              <Tooltip title={verdict.tooltip}>
+                <Chip size="small" color="success" variant="outlined"
+                      icon={<CheckCircleIcon fontSize="small" />} label="Model" />
+              </Tooltip>
+            ) : (
+              <Tooltip title={verdict.tooltip}>
+                <Chip size="small" color="error" variant="outlined"
+                      icon={<CancelIcon fontSize="small" />} label="Model" />
+              </Tooltip>
+            )
           )}
         </Stack>
 
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
-          <Typography variant="h5" sx={{ fontWeight:800 }}>{pct}%</Typography>
-          <Typography variant="body2" sx={{ opacity:0.75 }}>{game?.home?.code} vs {game?.away?.code}</Typography>
-        </Stack>
+        {/* With probability -> show number + bar. Without -> show plain pick label */}
+        {hasProb ? (
+          <>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
+              <Typography variant="h5" sx={{ fontWeight:800 }}>{pct}%</Typography>
+              <Typography variant="body2" sx={{ opacity:0.75 }}>
+                {homeCode} vs {awayCode}
+              </Typography>
+            </Stack>
 
-        <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
-          <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
-        </Box>
+            <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
+              <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
+            </Box>
+          </>
+        ) : (
+          <Typography variant="body2" sx={{ mt:1, opacity:0.8 }}>
+            Model pick: <strong>{getPredictedWinnerCode(game) || '—'}</strong>
+          </Typography>
+        )}
       </CardContent>
     </Card>
   );
