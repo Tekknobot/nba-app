@@ -26,6 +26,7 @@ import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
 import { Link as RouterLink } from "react-router-dom";
 
 import HaikuOfTheDay from "./HaikuOfTheDay";
+import CityCourtOfTheDay from "./CityCourtOfTheDay";
 
 // Rough NBA calendar: regular season runs Oct–Jun; offseason Jul–Sep
 function isOffseasonMonth(d = new Date()) {
@@ -688,6 +689,9 @@ export default function AllGamesCalendar(){
 
       {/* drawer */}
       <ComparisonDrawer open={compareOpen} onClose={()=> setCompareOpen(false)} game={compareGame} />
+
+      {/* City Court Series */}
+      <CityCourtOfTheDay />
 
       {/* news */}
       <NbaNews />
