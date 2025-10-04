@@ -5,8 +5,7 @@ import {
   Box, Card, CardContent, Typography, List, ListItem, ListItemText
 } from "@mui/material";
 
-const BDL_BASE =
-  process.env.NODE_ENV === "development" ? "/bdl" : "/api/bdl";
+const BDL_BASE = "/api/bdl";
 
 function safeDateLabel(iso, hasClock) {
   if (!iso) return "TBD";
