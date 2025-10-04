@@ -572,6 +572,9 @@ export default function AllGamesCalendar(){
         </CardContent>
       </Card>
 
+      {/* 👇 Daily original content */}
+      <HaikuOfTheDay compact look="script" />
+
       {/* header */}
       <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px:1.5 }}>
