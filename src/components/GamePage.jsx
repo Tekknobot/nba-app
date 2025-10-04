@@ -212,6 +212,8 @@ const [h2h, setH2h] = useState(null);
 const [leadersHome, setLeadersHome] = useState(null);
 const [leadersAway, setLeadersAway] = useState(null);
 const [notesTried, setNotesTried] = useState({ h2h: false, leaders: false });
+const [formHome, setFormHome] = useState(null);
+const [formAway, setFormAway] = useState(null);
 
 // 1) Load the game when :id changes
 useEffect(() => {
@@ -238,15 +240,19 @@ useEffect(() => {
   let ok = true;
   (async () => {
     try {
-      const [hh, lh, la] = await Promise.all([
+      const [hh, lh, la, fh, fa] = await Promise.all([
         fetchHeadToHead(game.home.code, game.away.code, game.dateISO).catch(() => null),
         fetchTeamLeaders(game.home.code, game.dateISO).catch(() => null),
         fetchTeamLeaders(game.away.code, game.dateISO).catch(() => null),
+        fetchLast10Record(game.home.code, game.dateISO).catch(() => null),
+        fetchLast10Record(game.away.code, game.dateISO).catch(() => null),        
       ]);
       if (!ok) return;
       setH2h(hh);
       setLeadersHome(lh);
       setLeadersAway(la);
+      setFormHome(fh);
+      setFormAway(fa);      
     } finally {
       if (ok) setNotesTried({ h2h: true, leaders: true });
     }
