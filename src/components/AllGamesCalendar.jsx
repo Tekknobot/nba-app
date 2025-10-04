@@ -137,7 +137,15 @@ function monthRange(year, month){ const start = new Date(year, month, 1); const 
   const fmt = (d)=> `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   return { start: fmt(start), end: fmt(end) };
 }
-function bdlHeaders() { const key = process.env.REACT_APP_BDL_API_KEY; return key ? { Authorization: key } : {}; }
+
+function bdlHeaders() {
+  const raw = process.env.REACT_APP_BDL_API_KEY || "";
+  if (!raw) return {};
+  // some BDL setups expect 'Bearer ', others accept raw — sending Bearer is always safe
+  const value = raw.toLowerCase().startsWith("bearer ") ? raw : `Bearer ${raw}`;
+  return { Authorization: value };
+}
+
 async function fetchMonthScheduleBDL(year, month) {
   const { start, end } = monthRange(year, month);
   const headers = bdlHeaders();
