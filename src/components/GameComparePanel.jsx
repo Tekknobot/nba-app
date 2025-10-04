@@ -258,12 +258,6 @@ async function fetchSeasonAveragesBatchBDL(playerIds, seasonEndYear) {
   return Array.isArray(j?.data) ? j.data : [];
 }
 
-function seasonEndYearFrom(anchorISO) {
-  const d = anchorISO ? new Date(anchorISO) : new Date();
-  const m = d.getMonth();
-  return (m >= 9) ? d.getFullYear() + 1 : d.getFullYear();
-}
-
 async function fetchRecentPlayerAveragesBDL(teamAbbr, { days = 21, anchorISO = null } = {}) {
   const teamId = BDL_TEAM_ID[teamAbbr];
   if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
