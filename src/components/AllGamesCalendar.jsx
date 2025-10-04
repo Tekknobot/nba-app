@@ -25,6 +25,8 @@ import Link from "@mui/material/Link";
 import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
 import { Link as RouterLink } from "react-router-dom";
 
+import HaikuOfTheDay from "./HaikuOfTheDay";
+
 // Rough NBA calendar: regular season runs Oct–Jun; offseason Jul–Sep
 function isOffseasonMonth(d = new Date()) {
   const m = d.getMonth(); // 0..11
