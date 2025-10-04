@@ -1,3 +1,4 @@
+// src/components/About.jsx
 import React from "react";
 import { Box, Card, CardContent, Typography, Divider } from "@mui/material";
 
@@ -11,11 +12,9 @@ export default function About() {
             About PIVT
           </Typography>
           <Typography variant="body1" sx={{ mb: 2 }}>
-            PIVT is an NBA calendar and matchup helper built for basketball fans.
-            It provides a clean, mobile-friendly way to browse the NBA schedule,
-            check recent team performance, and view simple win probability insights
-            for upcoming matchups. The goal is to give fans an easy-to-use tool
-            for following the season.
+            PIVT is an NBA calendar and matchup helper. It gives a clean, mobile-first
+            way to browse the schedule, scan recent team form, and see a light, fan-oriented
+            “Model edge” estimate for upcoming games. It’s for context, not betting advice.
           </Typography>
 
           <Divider sx={{ my: 3 }} />
@@ -25,94 +24,98 @@ export default function About() {
             Privacy Policy
           </Typography>
           <Typography variant="body1" sx={{ mb: 2 }}>
-            The developer of PIVT does not collect, store, or share any personal
-            user data. The app does not require user accounts and does not track
-            individual usage.
+            The developer of PIVT does not collect, store, or share any personal user data.
+            The app has no accounts and does not track individual usage.
           </Typography>
           <Typography variant="body1" sx={{ mb: 2 }}>
-            Any ads displayed within the app are served by third-party providers
-            (such as Google AdSense). These providers may use cookies or similar
-            technologies to deliver more relevant ads. PIVT itself does not
-            distribute, sell, or share any private user information.
+            Any ads are served by third-party providers (e.g., Google AdSense). Those providers
+            may use cookies or similar technologies to deliver more relevant ads. PIVT itself
+            does not distribute, sell, or share private user information.
           </Typography>
 
           <Divider sx={{ my: 3 }} />
 
-          {/* Model Edge Section (updated) */}
+          {/* Model Edge Section (aligned with implementation) */}
           <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
             How “Model edge” Works
           </Typography>
           <Typography variant="body1" sx={{ mb: 2 }}>
-            “Model edge” is a light, explanatory estimate of the home team’s win
-            probability. It blends very recent form with a simple prior so it’s
-            useful from opening night onward. It is not betting advice.
+            “Model edge” is a simple, transparent estimate of the <em>home team’s</em> win
+            probability. It combines a prior (from last season) with very recent form so it’s
+            useful from opening night onward. It’s intentionally conservative and easy to read.
           </Typography>
 
           <Box component="ul" sx={{ pl: 3, m: 0 }}>
             <Box component="li" sx={{ mb: 1.25 }}>
               <Typography variant="body1">
-                <strong>Recent form (rolling window):</strong> When regular-season games
-                are available, PIVT summarizes each team’s most recent finals within a
-                rolling window (up to the last 10 games, ~21 days). We track short-term
-                performance (record and scoring margins) rather than season-long ratings.
+                <strong>Prior baseline:</strong> We start with last completed season’s average
+                point differential for both teams (home minus away), add a modest home-court
+                advantage (~2.3 points), and include a tiny preseason nudge (last 30 days, very
+                small weight). This becomes a prior probability via a logistic mapping.
               </Typography>
             </Box>
 
             <Box component="li" sx={{ mb: 1.25 }}>
               <Typography variant="body1">
-                <strong>Prior baseline (fallback before data exists):</strong> If the
-                season has just started or recent games are sparse, we use a prior based on
-                last season’s average point differential (team strength), a modest home-court
-                boost (~2.3 points), and a tiny preseason nudge if any recent exhibition
-                finals exist. This prevents “no data” gaps early on.
+                <strong>Recent form (this season):</strong> When regular-season finals exist,
+                we summarize each team’s last 10 results up to the game date and convert the
+                win–loss difference (home minus away) into a recent-form probability. (H2H is
+                shown in the UI for context but does not drive the probability.)
               </Typography>
             </Box>
 
             <Box component="li" sx={{ mb: 1.25 }}>
               <Typography variant="body1">
-                <strong>Smooth blend (recent ↔ prior):</strong> As the window fills, we
-                blend recent form with the prior on <em>log-odds</em> (calibrated) based on
-                how many recent finals each team has (0 → prior only, up to 10 → recent-heavy).
-                This avoids overreacting on tiny samples and gradually shifts to current form.
+                <strong>Smooth blend on log-odds:</strong> We blend prior and recent on the
+                logit scale. The recent weight (<code>α</code>) grows with the amount of
+                current-season data for both teams: 0 games → 0%, 1 → 25%, 2 → 40%, 3 → 55%,
+                4 → 70%, ≥5 → 80%. This avoids overreacting to tiny samples and shifts toward
+                current form as the season matures.
               </Typography>
             </Box>
 
             <Box component="li" sx={{ mb: 1.25 }}>
               <Typography variant="body1">
-                <strong>Rest & back-to-back:</strong> The estimate includes days of rest
-                before the game and applies a small penalty for back-to-backs to reflect
-                typical fatigue effects.
+                <strong>Output & labels:</strong> The drawer shows the home win percent and a
+                small bar. It also labels the source: <em>prior</em> (no current data yet),
+                <em>recent</em> (plenty of current data), or <em>blend</em> (mix of both).
               </Typography>
             </Box>
 
             <Box component="li" sx={{ mb: 1.25 }}>
               <Typography variant="body1">
-                <strong>Home court:</strong> We apply a modest home-court advantage.
-                Neutral site is assumed false.
+                <strong>Top players panel:</strong> We try to show 21-day rolling player
+                averages from recent box scores. If your data tier blocks that endpoint,
+                we fall back to season averages and label the panel accordingly.
               </Typography>
             </Box>
 
             <Box component="li" sx={{ mb: 1.25 }}>
               <Typography variant="body1">
-                <strong>Logistic mapping:</strong> The combined signal is passed through
-                a logistic curve to produce a home-win probability (shown as a percentage).
-              </Typography>
-            </Box>
-
-            <Box component="li" sx={{ mb: 1.25 }}>
-              <Typography variant="body1">
-                <strong>Transparency in the UI:</strong> The drawer labels which source
-                powered the estimate—“recent form”, “prior model”, or “blended”—and the
-                “Top players” panel indicates “last 21 days” or “season averages (fallback)”
-                when recent player box scores aren’t available for your API tier.
+                <strong>Verdict chip (finals only):</strong> After a game is Final, the chip
+                indicates whether the model pick (or the blended edge when the model pick is
+                absent) matched the actual result (✔/✖). If the month view lacks final scores,
+                we fetch the single game once to fill them so the verdict can render.
               </Typography>
             </Box>
           </Box>
 
           <Typography variant="body2" sx={{ mt: 2, opacity: 0.8 }}>
-            Notes: The estimate is intentionally simple and driven by short-term data; it
-            does not include injuries, travel details, rotations, or betting market inputs.
-            “Model edge” is provided for fan context only.
+            Notes: The estimate is deliberately lightweight. It does <em>not</em> include
+            injuries, travel logistics, rotations, or betting markets. It’s for fan context
+            and fun — not wagering.
+          </Typography>
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* Data Sources / Tech */}
+          <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
+            Data & Tech
+          </Typography>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Schedules, finals, and box scores are fetched from the public{" "}
+            <strong>balldontlie</strong> API. Times shown in the calendar are normalized to
+            avoid day slips across time zones where possible.
           </Typography>
         </CardContent>
       </Card>
