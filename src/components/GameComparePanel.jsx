@@ -109,29 +109,6 @@ function modelVerdict(game) {
   };
 }
 
-// --- roster by team (players -> ids) ---
-async function fetchTeamRosterByTeamIdBDL(teamAbbr, { perPage = 100 } = {}) {
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-  const headers = bdlHeaders();
-  let page = 1, out = [];
-  const u = new URL("https://api.balldontlie.io/v1/players");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("per_page", String(perPage));
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const arr = Array.isArray(j?.data) ? j.data : [];
-    out.push(...arr);
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-  return out; // array of players with .id
-}
-
 // --- season averages batch for a set of player ids ---
 async function fetchSeasonAveragesBatchBDL(playerIds, seasonEndYear) {
   if (!playerIds?.length) return [];
