@@ -361,7 +361,6 @@ function GameCard({ game, onPick }) {
               "&:focus-visible": { outline:"2px solid", outlineColor:"primary.main", outlineOffset:2, borderRadius:4 },
             }}
           >
-            Full game page
             <ArrowRightAltIcon sx={{ fontSize: 14, ml: 0.25 }} />
           </Link>
         </Stack>
