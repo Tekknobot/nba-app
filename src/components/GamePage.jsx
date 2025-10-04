@@ -111,8 +111,6 @@ function homeCodeToId(code){ const id = BDL_TEAM_ID[(code||"").toUpperCase()]; i
 // Roster → player ids (for season_averages), then compute leaders
 async function fetchTeamLeaders(teamCode, dateISO) {
   const { endYear } = seasonWindowFromISO(dateISO);
-
-  // 1) roster
   const rosterQs = new URLSearchParams({ "team_ids[]": homeCodeToId(teamCode), per_page: "100" }).toString();
   const roster = await fetchJsonViaGateway(`players?${rosterQs}`);
   const ids = Array.from(new Set((roster || []).map(p => p?.id).filter(Number))).slice(0, 30);
@@ -123,9 +121,8 @@ async function fetchTeamLeaders(teamCode, dateISO) {
   ids.forEach(id => saQs.append("player_ids[]", String(id)));
   let avgs = await fetchJsonViaGateway(`season_averages?${saQs.toString()}`).catch(()=>null);
 
-  // if empty, fall back to recent 21 days via /stats
+  // Fallback: recent 21-day stats -> compute per-game
   if (!Array.isArray(avgs) || avgs.length === 0) {
-    // recent window
     const anchor = dateISO ? new Date(dateISO) : new Date();
     const endStr = anchor.toISOString().slice(0,10);
     const startStr = new Date(anchor.getTime() - 21*864e5).toISOString().slice(0,10);
@@ -138,31 +135,23 @@ async function fetchTeamLeaders(teamCode, dateISO) {
       per_page: "100"
     }).toString();
 
-    // paginate (simple: first page)
     const stats = await fetchJsonViaGateway(`stats?${statsQs}`).catch(()=>[]);
     const byId = new Map();
     for (const s of stats || []) {
       const pid = s?.player?.id;
       if (!pid) continue;
-      if (!byId.has(pid)) byId.set(pid, { gp: 0, pts:0, reb:0, ast:0 });
+      if (!byId.has(pid)) byId.set(pid, { gp: 0, pts:0, reb:0, ast:0, ply: s.player });
       const row = byId.get(pid);
-      row.gp += 1;
-      row.pts += s?.pts || 0;
-      row.reb += s?.reb || 0;
-      row.ast += s?.ast || 0;
+      row.gp += 1; row.pts += s?.pts||0; row.reb += s?.reb||0; row.ast += s?.ast||0;
     }
-    // convert to per-game averages
-    avgs = Array.from(byId.entries()).map(([pid, r])=>({
-      player_id: pid, games_played: r.gp,
-      pts: r.gp ? r.pts / r.gp : 0,
-      reb: r.gp ? r.reb / r.gp : 0,
-      ast: r.gp ? r.ast / r.gp : 0
+    avgs = Array.from(byId.values()).map(r => ({
+      player_id: r.ply?.id, games_played: r.gp,
+      pts: r.gp ? r.pts/r.gp : 0, reb: r.gp ? r.reb/r.gp : 0, ast: r.gp ? r.ast/r.gp : 0
     }));
   }
 
   if (!Array.isArray(avgs) || avgs.length === 0) return null;
 
-  // join names
   const byRoster = new Map((roster||[]).map(p=>[p.id, p]));
   const rows = avgs.map(a => ({
     id: a.player_id,
@@ -173,7 +162,7 @@ async function fetchTeamLeaders(teamCode, dateISO) {
     ply: byRoster.get(a.player_id) || null
   }));
 
-  const minGp = 3; // slightly looser for recent window
+  const minGp = 3;
   const top = (key) => rows.filter(r => r.gp >= minGp).sort((x,y)=> (y[key]||0)-(x[key]||0))[0];
   const p = top("pts"), r = top("reb"), a = top("ast");
   const name = (row) => row?.ply ? `${row.ply.first_name||""} ${row.ply.last_name||""}`.trim() : null;
@@ -186,6 +175,34 @@ async function fetchTeamLeaders(teamCode, dateISO) {
   };
 }
 
+async function fetchLast10Record(teamCode, dateISO) {
+  const { start, end } = seasonWindowFromISO(dateISO);
+  const qs = new URLSearchParams({
+    "team_ids[]": homeCodeToId(teamCode),
+    start_date: start,
+    end_date: end,
+    postseason: "false",
+    per_page: "100"
+  }).toString();
+  const data = await fetchJsonViaGateway(`games?${qs}`).catch(()=>[]);
+  // keep finals up to anchor date, newest first
+  const finals = (data||[])
+    .filter(g => /final/i.test(g?.status||""))
+    .filter(g => (g?.date||"").slice(0,10) <= (dateISO||"").slice(0,10))
+    .sort((a,b)=> new Date(b.date)-new Date(a.date))
+    .slice(0, 10);
+  let w=0,l=0,t=0;
+  for (const g of finals) {
+    const homeAbbr = (g.home_team?.abbreviation||"").toUpperCase();
+    const hs = g.home_team_score, as = g.visitor_team_score;
+    const mine = homeAbbr === teamCode ? hs : as;
+    const theirs = homeAbbr === teamCode ? as : hs;
+    if (!Number.isFinite(mine)||!Number.isFinite(theirs)) continue;
+    if (mine > theirs) w++; else if (mine < theirs) l++; else t++;
+  }
+  return `${w}-${l}${t?`-${t}`:""}`;
+}
+
 export default function GamePage() {
   const { id } = useParams();
   const [game, setGame] = useState(null);
@@ -196,8 +213,28 @@ const [leadersHome, setLeadersHome] = useState(null);
 const [leadersAway, setLeadersAway] = useState(null);
 const [notesTried, setNotesTried] = useState({ h2h: false, leaders: false });
 
+// 1) Load the game when :id changes
 useEffect(() => {
-  if (!game) return;
+  let ok = true;
+  (async () => {
+    try {
+      const g = await fetchGameById(id);
+      if (!ok) return;
+      setGame(g);
+      setErr(null);
+    } catch (e) {
+      if (!ok) return;
+      setErr(e?.message || String(e));
+      setGame(null);
+    }
+  })();
+  return () => { ok = false; };
+}, [id]);
+
+// 2) When game is present, load Preview Notes (H2H + leaders)
+//    This runs on both past and future games; it's safe to keep as-is.
+useEffect(() => {
+  if (!game) return;              // guard: only after game loaded
   let ok = true;
   (async () => {
     try {
@@ -211,35 +248,19 @@ useEffect(() => {
       setLeadersHome(lh);
       setLeadersAway(la);
     } finally {
-      if (!ok) return;
-      setNotesTried({ h2h: true, leaders: true });
+      if (ok) setNotesTried({ h2h: true, leaders: true });
     }
   })();
   return () => { ok = false; };
 }, [game]);
 
+// 3) AdSense push (optional)
+useEffect(() => {
+  if (window.adsbygoogle && document.querySelector(".adsbygoogle")) {
+    try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch {}
+  }
+}, [game]);
 
-  useEffect(() => {
-    let ok = true;
-    (async () => {
-      try {
-        const g = await fetchGameById(id);
-        if (!ok) return;
-        setGame(g);
-      } catch (e) {
-        if (!ok) return;
-        setErr(e?.message || String(e));
-      }
-    })();
-    return () => { ok = false; };
-  }, [id]);
-
-  // AdSense push (ignore if you don't use)
-  useEffect(() => {
-    if (window.adsbygoogle && document.querySelector(".adsbygoogle")) {
-      try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch {}
-    }
-  }, [game]);
 
   if (err) {
     return (
@@ -347,11 +368,19 @@ useEffect(() => {
         </Typography>
         )}
 
+        {/* ⬇️ Add recent form right here */}
+        {formHome && formAway && (
+        <Typography variant="body2" sx={{ mb: 1 }}>
+            Recent form (last 10): {game.home.code} {formHome}, {game.away.code} {formAway}.
+        </Typography>
+        )}        
+
         {/* Impact players */}
         <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
         Impact players (season averages)
         </Typography>
         <List dense sx={{ mt: 0 }}>
+            
         {/* Home leaders */}
         {leadersHome ? (
             <ListItem disableGutters sx={{ py: 0.25 }}>
