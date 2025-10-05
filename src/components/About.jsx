@@ -117,6 +117,53 @@ export default function About() {
             <strong>balldontlie</strong> API. Times shown in the calendar are normalized to
             avoid day slips across time zones where possible.
           </Typography>
+
+          {/* Accuracy & Disclaimer */}
+          <Divider sx={{ my: 3 }} />
+
+          <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
+            Accuracy & Disclaimer
+          </Typography>
+
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            PIVT provides win-probability estimates and matchup context for informational and
+            entertainment purposes only. It is <strong>not</strong> betting advice, a prediction
+            service, or a guarantee of outcomes.
+          </Typography>
+
+          <Box component="ul" sx={{ pl: 3, m: 0 }}>
+            <Box component="li" sx={{ mb: 1.25 }}>
+              <Typography variant="body1">
+                <strong>Estimates, not promises:</strong> Numbers can be wrong. Data feed delays,
+                missing box scores, and simplified assumptions all introduce error.
+              </Typography>
+            </Box>
+            <Box component="li" sx={{ mb: 1.25 }}>
+              <Typography variant="body1">
+                <strong>Scope limits:</strong> The model is lightweight and does not account for
+                injuries, rest, rotations, travel, or late news unless explicitly noted.
+              </Typography>
+            </Box>
+            <Box component="li" sx={{ mb: 1.25 }}>
+              <Typography variant="body1">
+                <strong>No liability:</strong> The developer assumes no responsibility for decisions
+                made using this site, including financial losses.
+              </Typography>
+            </Box>
+            <Box component="li" sx={{ mb: 1.25 }}>
+              <Typography variant="body1">
+                <strong>No guarantees of accuracy or availability:</strong> Services may be interrupted
+                or data may be incomplete, outdated, or incorrect.
+              </Typography>
+            </Box>
+          </Box>
+
+          <Typography variant="body2" sx={{ mt: 2, opacity: 0.85 }}>
+            If you choose to wager, do so responsibly and only where legal. By using PIVT, you agree the
+            information is provided “as is” without warranties and that you bear sole responsibility for
+            how you use it. PIVT does not solicit, promote, or facilitate gambling.
+          </Typography>
+          
         </CardContent>
       </Card>
     </Box>
