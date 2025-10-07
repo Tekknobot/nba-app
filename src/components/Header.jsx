@@ -8,11 +8,20 @@ export default function Header() {
   const isAll = pathname === "/" || pathname.startsWith("/all");
   const isAbout = pathname.startsWith("/about");
   const isContact = pathname.startsWith("/contact");
-  const isPrivacy = pathname.startsWith("/privacy");  // NEW
-  const isBlog = pathname.startsWith("/blog");        // NEW
+  const isPrivacy = pathname.startsWith("/privacy");
+  const isBlog = pathname.startsWith("/blog");
 
   return (
-    <AppBar position="sticky" color="transparent" elevation={0} sx={{ borderBottom: 1, borderColor: "divider" }}>
+    <AppBar
+      position="fixed"                 // <-- fixed so content scrolls under
+      color="inherit"
+      elevation={3}
+      sx={{
+        bgcolor: "background.paper",   // <-- opaque background
+        borderBottom: 1,
+        borderColor: "divider",
+      }}
+    >
       <Toolbar sx={{ gap: 1, justifyContent: "space-between" }}>
         <Button component={RouterLink} to="/" variant="text" size="small">
           PIVT
