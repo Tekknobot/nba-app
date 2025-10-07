@@ -6,8 +6,7 @@ import Header from "./components/Header";
 import About from "./components/About";
 import Contact from "./components/Contact";
 import Privacy from "./components/Privacy";   
-import Blog from "./components/Blog";         
-import All from "./components/All";           
+import Blog from "./components/Blog";                   
 
 export default function App() {
   return (
@@ -15,12 +14,10 @@ export default function App() {
       <Header />
       <Routes>
         <Route path="/" element={<All />} />
-        <Route path="/all" element={<All />} />
         <Route path="/about" element={<About />} />
         <Route path="/contact" element={<Contact />} />
         <Route path="/privacy" element={<Privacy />} />  
         <Route path="/blog" element={<Blog />} />        
-        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );
