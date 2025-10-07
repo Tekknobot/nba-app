@@ -586,25 +586,63 @@ export default function AllGamesCalendar(){
       <HaikuOfTheDay compact look="typewriter" />
 
       {/* header */}
-      <Box sx={{ position:'sticky', top:0, zIndex:(t)=>t.zIndex.appBar, bgcolor:'background.default', pt:1, pb:1 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px:1.5 }}>
-          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth:0 }}>
+      <Box
+        sx={{
+          position: 'sticky',
+          top: { xs: 56, sm: 64 },                 // offset for fixed AppBar (Toolbar height)
+          zIndex: (t) => t.zIndex.appBar - 1,      // stay under the site header
+          bgcolor: 'background.default',
+          pt: 1,
+          pb: 1,
+          borderBottom: 1,
+          borderColor: 'divider',
+          backdropFilter: 'saturate(180%) blur(8px)', // subtle glassy feel (optional)
+        }}
+      >
+        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.5 }}>
+          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 0 }}>
             <Box sx={{ lineHeight: 1 }}>
-              <Typography variant="h6" sx={{ fontFamily:'"Bebas Neue", sans-serif', fontSize:{ xs:26, sm:32 }, letterSpacing:1, fontWeight:400 }} />
-              <Typography variant="caption" sx={{ opacity:0.75, display:'block', mt:-0.25, maxWidth:280, whiteSpace:'normal', wordBreak:'break-word' }}>
-                NBA <SportsBasketballIcon fontSize="small" sx={{ verticalAlign:"middle" }} />
+              <Typography
+                variant="h6"
+                sx={{ fontFamily: '"Bebas Neue", sans-serif', fontSize: { xs: 26, sm: 32 }, letterSpacing: 1, fontWeight: 400 }}
+              />
+              <Typography
+                variant="caption"
+                sx={{ opacity: 0.75, display: 'block', mt: -0.25, maxWidth: 280, whiteSpace: 'normal', wordBreak: 'break-word' }}
+              >
+                NBA <SportsBasketballIcon fontSize="small" sx={{ verticalAlign: 'middle' }} />
               </Typography>
             </Box>
-            <Divider orientation="vertical" flexItem sx={{ opacity:0.2 }} />
+            <Divider orientation="vertical" flexItem sx={{ opacity: 0.2 }} />
             <Stack direction="row" spacing={1} alignItems="center">
               <CalendarMonthIcon fontSize="small" />
-              <Typography variant="subtitle1" sx={{ fontWeight:700 }} noWrap>{headerMonth}</Typography>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700 }} noWrap>
+                {headerMonth}
+              </Typography>
             </Stack>
           </Stack>
 
           <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignSelf: 'center' }}>
-            <IconButton size="small" onClick={()=>{ const n=addMonths(viewMonth,-1); setViewMonth(n); setSelectedDate(n); }}><ChevronLeftIcon fontSize="small" /></IconButton>
-            <IconButton size="small" onClick={()=>{ const n=addMonths(viewMonth, 1); setViewMonth(n); setSelectedDate(n); }}><ChevronRightIcon fontSize="small" /></IconButton>
+            <IconButton
+              size="small"
+              onClick={() => {
+                const n = addMonths(viewMonth, -1);
+                setViewMonth(n);
+                setSelectedDate(n);
+              }}
+            >
+              <ChevronLeftIcon fontSize="small" />
+            </IconButton>
+            <IconButton
+              size="small"
+              onClick={() => {
+                const n = addMonths(viewMonth, 1);
+                setViewMonth(n);
+                setSelectedDate(n);
+              }}
+            >
+              <ChevronRightIcon fontSize="small" />
+            </IconButton>
           </Stack>
         </Stack>
       </Box>
