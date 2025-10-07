@@ -1,6 +1,7 @@
 // scripts/generate-daily-post.mjs
-// Generates /public/blog/YYYY-MM-DD.md with original summaries.
-// Run daily (e.g., as a CI cron or predeploy). No external keys required.
+// Generates /public/blog/YYYY-MM-DD.md using your schedule + (optional) light model info.
+// No haiku; front-matter kept, but we'll strip it client-side for display.
+// Safe to run during prebuild.
 
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
@@ -9,77 +10,104 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 const BLOG_DIR = join(root, "public", "blog");
+const UPCOMING_JSON = join(root, "public", "upcoming-3mo.json");
 
 function isoDate(d = new Date()) { return new Date(d).toISOString().slice(0,10); }
-function titleCase(s) { return s.replace(/\b([a-z])/g, (m,c)=>c.toUpperCase()); }
 
 async function readUpcoming() {
-  const p = join(root, "public", "upcoming-3mo.json"); // produced by your existing fetch script
-  try { return JSON.parse(await readFile(p, "utf8")); } catch { return []; }
+  try { return JSON.parse(await readFile(UPCOMING_JSON, "utf8")); } catch { return []; }
 }
 
-function haikuFor(dateStr) {
-  // lightweight deterministic generator (mirrors your component)
-  const L5 = ["net twitches softly","shoes hum on hardwood","hands find the rhythm","crowd learns to exhale","cold rim warms at dawn"];
-  const L7 = ["no-look passes thread the seam","backs cut like comets in flight","chalk dust rises in halos","timeouts bend the arena hum","box outs carve quiet space"];
-  const L5B= ["scoreboards blink, then rest","voices drift like rain","the glass keeps no lies","evening folds the court","whistles fade to dusk"];
-
-  const seed = [...dateStr].reduce((h,ch)=>Math.imul(h^ch.charCodeAt(0), 16777619)>>>0, 2166136261);
-  const rng = (()=>{ let s=seed; return ()=>((s=Math.imul(s^s>>>15, 1|s))+ (s^=s+ (s>>>7|s<<25))>>>0)/2**32; })();
-  const pick = (arr)=>arr[Math.floor(rng()*arr.length)];
-  return [pick(L5), pick(L7), pick(L5B)];
+function fmtTimeLocal(iso) {
+  try {
+    const d = new Date(iso);
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      weekday: "short"
+    }).format(d);
+  } catch { return "TBD"; }
 }
 
 function summarizeMatchup(g) {
-  // g = { home, away, startTimeLocal, edgeHome (0..1), tv?, notes? }
-  const edge = g.edgeHome;
-  const fav = edge >= 0.5 ? g.home : g.away;
-  const pct = Math.round((edge >= 0.5 ? edge : 1-edge) * 100);
-  const angle = edge >= 0.6 ? "clear edge" : edge >= 0.55 ? "slight lean" : "coin-flip";
-  return `• ${g.away} @ ${g.home} — ${fav} ${angle} (~${pct}% by PIVT), tip ${g.startTimeLocal}`;
+  const edge = Number(g?.model?.pHome);
+  const home = g?.home?.name || g?.home || "Home";
+  const away = g?.away?.name || g?.away || "Away";
+  const tip  = g?._iso ? fmtTimeLocal(g._iso) : "TBD";
+  if (Number.isFinite(edge)) {
+    const fav = edge >= 0.5 ? home : away;
+    const pct = Math.round((edge >= 0.5 ? edge : 1 - edge) * 100);
+    const note =
+      edge >= 0.60 ? "clear edge" :
+      edge >= 0.55 ? "slight lean" : "coin-flip";
+    return `• **${away} @ ${home}** — ${fav} ${note} (~${pct}%) · ${tip}`;
+  }
+  return `• **${away} @ ${home}** — ${tip}`;
+}
+
+function pickTopEdges(list, k = 3) {
+  const withProb = list.filter(g => Number.isFinite(g?.model?.pHome));
+  withProb.sort((a,b) => Math.abs((b.model.pHome ?? 0.5) - 0.5) - Math.abs((a.model.pHome ?? 0.5) - 0.5));
+  return withProb.slice(0, k);
+}
+
+function nextGameDay(all, todayStr) {
+  const sorted = [...all].sort((a,b)=>String(a.dateKey||"").localeCompare(String(b.dateKey||"")));
+  const t = todayStr;
+  for (const g of sorted) {
+    const d = (g.dateKey||"").slice(0,10);
+    if (d > t) return d;
+  }
+  return null;
 }
 
 async function main() {
   const today = isoDate();
-  const upcoming = await readUpcoming();
+  const upcoming = await readUpcoming(); // array of game rows produced by your fetch script
 
-  // filter today's games; adjust if your JSON uses a different shape/keys
-  const todays = (upcoming || []).filter(g => (g.date || g.gameDate)?.slice(0,10) === today);
+  // Games today
+  const todays = (upcoming || []).filter(g => (g.dateKey || g.gameDate || "").slice(0,10) === today);
 
-  // produce summaries — replace with your own edge calc if available in JSON
-  const lines = todays.slice().sort((a,b)=>String(a.startTimeLocal).localeCompare(String(b.startTimeLocal)))
+  // Build sections based on your app’s core features
+  let lines = todays
+    .slice()
+    .sort((a,b)=>String(a._iso||"").localeCompare(String(b._iso||"")))
     .map(summarizeMatchup);
 
-  const [h1,h2,h3] = haikuFor(today);
+  const edges = pickTopEdges(todays, 3).map(summarizeMatchup);
+  const nxt = nextGameDay(upcoming, today);
 
-  const md = `---
+  const header = `--- 
 title: "NBA Daily Pulse — ${today}"
-description: "Original daily summary: top matchups, trends, injuries, and a fresh haiku."
----
+description: "Daily slate overview with Model edge, form notes, injuries, and what’s next."
+---`;
 
-# NBA Daily Pulse — ${today}
+  const md = [
+    header,
+    `# NBA Daily Pulse — ${today}`,
+    "",
+    "## Today’s Slate",
+    lines.length ? lines.join("\n") : "No games today.",
+    "",
+    "## Model Edge Spotlight",
+    edges.length ? edges.join("\n") : "No quantified edges available for today’s slate.",
+    "",
+    "## Form Watch",
+    "- Recent 10-game results and scoring margins are reflected in each matchup panel of the app.",
+    "- Use the calendar to jump days; tap a game to compare teams’ recent form.",
+    "",
+    "## Injury Watch",
+    "- We surface notable status changes from reliable outlets. Notes are summarized in our own words (no copied text).",
+    "",
+    "## What’s Next",
+    nxt ? `- Next tip-off day: **${nxt}**` : "- Check back soon for the next slate.",
+    "",
+    "*PIVT estimates are for fan context — not betting advice.*",
+  ].join("\n");
 
-_${h1}_  
-_${h2}_  
-_${h3}_
-
-## Today’s Best Matchups
-${lines.length ? lines.join("\n") : "No games today."}
-
-## Form Watch
-- We highlight recent 10-game records and points diff (home vs away). See team pages in the app for details.
-
-## Injury Watch
-- We flag notable status changes and absences. Sources are public team reports and major outlets; notes are summarized in our own words.
-
----
-
-*PIVT estimates are lightweight and for fan context — not betting advice.*
-`;
   await mkdir(BLOG_DIR, { recursive: true });
-  const outPath = join(BLOG_DIR, `${today}.md`);
-  await writeFile(outPath, md, "utf8");
-  console.log("Wrote", outPath);
+  await writeFile(join(BLOG_DIR, `${today}.md`), md, "utf8");
+  console.log("Daily blog written:", today);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
