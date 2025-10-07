@@ -10,7 +10,7 @@
     "eject": "react-scripts eject",
     "server": "node server/index.js",
     "dev": "concurrently \"npm run server\" \"npm start\"",
-    "prebuild": "node scripts/fetch-nba-schedule.mjs"
+    "prebuild": "node scripts/fetch-nba-schedule.mjs && node scripts/generate-daily-post.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.11.4",
