@@ -684,7 +684,7 @@ export default function AllGamesCalendar(){
       )}
 
       {/* day strip */}
-      <Box ref={stripRef} sx={{ display:'flex', gap:1, overflowX:'auto', pb:1, "&::-webkit-scrollbar": { display:'none' } }}>
+      <Box ref={stripRef} sx={{ mt: 1.5, display:'flex', gap:1, overflowX:'auto', pb:1, "&::-webkit-scrollbar": { display:'none' } }}>
         {monthDays.map((d, idx)=>{
           const key = dateKeyFromDate(d);
           const count = (eventsMap.get(key) || []).length;
