@@ -1,6 +1,6 @@
 // src/components/Blog.jsx
 import React from "react";
-import { Box, Card, CardContent, Typography, Divider } from "@mui/material";
+import { Box, Card, CardContent, Typography, Divider, LinearProgress, Stack } from "@mui/material";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AdUnit from "./AdUnit";
@@ -20,6 +20,78 @@ function extractTitle(md) {
 function removeFirstH1(md) {
   // remove first H1 so we can render it as a page header
   return md.replace(/^\s*#\s+.+\s*$/m, "").trimStart();
+}
+
+/** Read the plain text of a markdown node's children */
+function nodeText(children) {
+  if (Array.isArray(children)) return children.map(nodeText).join("");
+  if (typeof children === "string") return children;
+  if (children && typeof children === "object" && "props" in children) {
+    return nodeText(children.props.children);
+  }
+  return "";
+}
+
+/** Try to extract a percentage like (~63%) or (63%) from a line of text */
+function extractPercent(s) {
+  const m = s.match(/~?\s*(\d{1,3})%\s*\)/); // matches (~63%) or (63%)
+  if (!m) return null;
+  const val = Math.max(0, Math.min(100, parseInt(m[1], 10)));
+  return Number.isFinite(val) ? val : null;
+}
+
+/** Optional: extract a short left label (e.g., matchup) for the bar row */
+function extractLeftLabel(line) {
+  // if the line starts with a bold matchup like **PHX @ DEN**, keep that; else take up to the first "—"
+  const bold = line.match(/\*\*(.+?)\*\*/);
+  if (bold) return bold[1];
+  const dash = line.split("—")[0]?.trim();
+  return dash && dash.length <= 48 ? dash : "Edge";
+}
+
+/** Optional: a right label (e.g., time after · ) */
+function extractRightLabel(line) {
+  const dot = line.split("·")[1]?.trim();
+  return dot || null;
+}
+
+/** Markdown <li> renderer with a % bar when it finds (~NN%) */
+function MdListItem(props) {
+  const txt = nodeText(props.children) || "";
+  const pct = extractPercent(txt);
+
+  if (pct == null) {
+    // No percentage → render a normal list item
+    return <li {...props} />;
+  }
+
+  const left = extractLeftLabel(txt);
+  const right = extractRightLabel(txt);
+
+  return (
+    <li style={{ paddingTop: 8, paddingBottom: 8 }}>
+      {/* original text as-is */}
+      <div>{props.children}</div>
+
+      {/* percent bar */}
+      <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+        <Stack direction="row" justifyContent="space-between" sx={{ fontSize: 12, opacity: 0.8 }}>
+          <span>{left}</span>
+          <span>{right ? right : `${pct}%`}</span>
+        </Stack>
+        <LinearProgress
+          variant="determinate"
+          value={pct}
+          sx={{
+            height: 8,
+            borderRadius: 999,
+            "& .MuiLinearProgress-bar": { borderRadius: 999 },
+          }}
+          aria-label={`Edge ${pct}%`}
+        />
+      </Stack>
+    </li>
+  );
 }
 
 export default function Blog() {
@@ -70,7 +142,12 @@ export default function Blog() {
                 "& hr": { my: 3, opacity: 0.2 },
               }}
             >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  li: MdListItem, // <-- our enhanced list item with bar
+                }}
+              >
                 {bodyMd}
               </ReactMarkdown>
             </Box>
