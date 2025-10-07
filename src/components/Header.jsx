@@ -12,39 +12,44 @@ export default function Header() {
   const isBlog = pathname.startsWith("/blog");
 
   return (
-    <AppBar
-      position="fixed"                 // <-- fixed so content scrolls under
-      color="inherit"
-      elevation={3}
-      sx={{
-        bgcolor: "background.paper",   // <-- opaque background
-        borderBottom: 1,
-        borderColor: "divider",
-      }}
-    >
-      <Toolbar sx={{ gap: 1, justifyContent: "space-between" }}>
-        <Button component={RouterLink} to="/" variant="text" size="small">
-          PIVT
-        </Button>
+    <>
+      <AppBar
+        position="fixed"
+        color="inherit"
+        elevation={3}
+        sx={{
+          bgcolor: "background.paper",
+          borderBottom: 1,
+          borderColor: "divider",
+        }}
+      >
+        <Toolbar sx={{ gap: 1, justifyContent: "space-between" }}>
+          <Button component={RouterLink} to="/" variant="text" size="small">
+            PIVT
+          </Button>
 
-        <Stack direction="row" spacing={1}>
-          <Button component={RouterLink} to="/all" variant={isAll ? "contained" : "text"} size="small">
-            All
-          </Button>
-          <Button component={RouterLink} to="/blog" variant={isBlog ? "contained" : "text"} size="small">
-            Blog
-          </Button>
-          <Button component={RouterLink} to="/about" variant={isAbout ? "contained" : "text"} size="small">
-            About
-          </Button>
-          <Button component={RouterLink} to="/privacy" variant={isPrivacy ? "contained" : "text"} size="small">
-            Privacy
-          </Button>
-          <Button component={RouterLink} to="/contact" variant={isContact ? "contained" : "text"} size="small">
-            Contact
-          </Button>
-        </Stack>
-      </Toolbar>
-    </AppBar>
+          <Stack direction="row" spacing={1}>
+            <Button component={RouterLink} to="/all" variant={isAll ? "contained" : "text"} size="small">
+              All
+            </Button>
+            <Button component={RouterLink} to="/blog" variant={isBlog ? "contained" : "text"} size="small">
+              Blog
+            </Button>
+            <Button component={RouterLink} to="/about" variant={isAbout ? "contained" : "text"} size="small">
+              About
+            </Button>
+            <Button component={RouterLink} to="/privacy" variant={isPrivacy ? "contained" : "text"} size="small">
+              Privacy
+            </Button>
+            <Button component={RouterLink} to="/contact" variant={isContact ? "contained" : "text"} size="small">
+              Contact
+            </Button>
+          </Stack>
+        </Toolbar>
+      </AppBar>
+
+      {/* Spacer so content starts below the fixed AppBar */}
+      <Toolbar />
+    </>
   );
 }
