@@ -1,6 +1,7 @@
 // server/index.js
 const express = require("express");
 const fetch = (...args) => import("node-fetch").then(m => m.default(...args));
+const path = require("path");                                  // <-- ADD
 
 const app = express();
 
@@ -11,6 +12,22 @@ app.use(cors({ origin: true })); // or replace 'true' with your exact frontend o
 const PORT = process.env.PORT || 5001;
 
 const { XMLParser } = require("fast-xml-parser");
+
+/* -------------------- NEW: static hosting for the client -------------------- */
+// Serve the built React app (must run `npm run build` first)
+app.use(express.static(path.join(__dirname, "..", "build")));
+
+// Serve raw blog markdown files BEFORE the SPA fallback
+app.use(
+  "/blog",
+  express.static(path.join(__dirname, "..", "build", "blog"), {
+    setHeaders: (res) => {
+      // Be explicit so browsers don’t try to download:
+      res.type("text/markdown; charset=utf-8");
+    },
+  })
+);
+/* --------------------------------------------------------------------------- */
 
 /** UI -> BBR codes (note BRK/CHO/PHO) */
 const UI_TO_BBR = {
@@ -408,6 +425,12 @@ function registerNewsRoute(app) {
 // register routes/guards
 registerNewsRoute(app);
 registerJsonApiGuards(app);
+
+/* -------------------- NEW: SPA fallback after all routes -------------------- */
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "..", "build", "index.html"));
+});
+/* --------------------------------------------------------------------------- */
 
 /* -------- start -------- */
 app.listen(PORT, () => {
