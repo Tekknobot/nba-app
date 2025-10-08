@@ -6,20 +6,24 @@ import remarkGfm from "remark-gfm";
 import AdUnit from "./AdUnit";
 
 function stripFrontMatter(md) {
-  // remove leading YAML block if present
   const fm = /^---\s*[\s\S]*?---\s*/;
   return md.replace(fm, "");
 }
-
 function extractTitle(md) {
-  // get first H1 (# Title). If none, fallback to today's date.
   const m = md.match(/^\s*#\s+(.+)\s*$/m);
   return m ? m[1].trim() : null;
 }
-
 function removeFirstH1(md) {
-  // remove first H1 so we can render it as a page header
   return md.replace(/^\s*#\s+.+\s*$/m, "").trimStart();
+}
+
+/* NEW: local date helper (America/Toronto) */
+function localISODate(tz = "America/Toronto", d = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(d);
+  const get = (t) => parts.find(p => p.type === t)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 /** Read the plain text of a markdown node's children */
@@ -31,49 +35,34 @@ function nodeText(children) {
   }
   return "";
 }
-
-/** Try to extract a percentage like (~63%) or (63%) from a line of text */
 function extractPercent(s) {
-  const m = s.match(/~?\s*(\d{1,3})%\s*\)/); // matches (~63%) or (63%)
+  const m = s.match(/~?\s*(\d{1,3})%\s*\)/);
   if (!m) return null;
   const val = Math.max(0, Math.min(100, parseInt(m[1], 10)));
   return Number.isFinite(val) ? val : null;
 }
-
-/** Optional: extract a short left label (e.g., matchup) for the bar row */
 function extractLeftLabel(line) {
-  // if the line starts with a bold matchup like **PHX @ DEN**, keep that; else take up to the first "—"
   const bold = line.match(/\*\*(.+?)\*\*/);
   if (bold) return bold[1];
   const dash = line.split("—")[0]?.trim();
   return dash && dash.length <= 48 ? dash : "Edge";
 }
-
-/** Optional: a right label (e.g., time after · ) */
 function extractRightLabel(line) {
   const dot = line.split("·")[1]?.trim();
   return dot || null;
 }
 
-/** Markdown <li> renderer with a % bar when it finds (~NN%) */
 function MdListItem(props) {
   const txt = nodeText(props.children) || "";
   const pct = extractPercent(txt);
-
-  if (pct == null) {
-    // No percentage → render a normal list item
-    return <li {...props} />;
-  }
+  if (pct == null) return <li {...props} />;
 
   const left = extractLeftLabel(txt);
   const right = extractRightLabel(txt);
 
   return (
     <li style={{ paddingTop: 8, paddingBottom: 8 }}>
-      {/* original text as-is */}
       <div>{props.children}</div>
-
-      {/* percent bar */}
       <Stack spacing={0.5} sx={{ mt: 0.75 }}>
         <Stack direction="row" justifyContent="space-between" sx={{ fontSize: 12, opacity: 0.8 }}>
           <span>{left}</span>
@@ -82,11 +71,7 @@ function MdListItem(props) {
         <LinearProgress
           variant="determinate"
           value={pct}
-          sx={{
-            height: 8,
-            borderRadius: 999,
-            "& .MuiLinearProgress-bar": { borderRadius: 999 },
-          }}
+          sx={{ height: 8, borderRadius: 999, "& .MuiLinearProgress-bar": { borderRadius: 999 } }}
           aria-label={`Edge ${pct}%`}
         />
       </Stack>
@@ -99,17 +84,18 @@ export default function Blog() {
   const [loaded, setLoaded] = React.useState(false);
 
   React.useEffect(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localISODate("America/Toronto");            // NEW
     fetch(`/blog/${today}.md`, { cache: "no-store" })
       .then((r) => (r.ok ? r.text() : null))
       .then((txt) => {
-        if (!txt) {
+        // guard against SPA fallback HTML
+        if (!txt || /^\s*<!doctype/i.test(txt)) {
           setRaw(`# NBA Daily Pulse — ${today}\nNo post generated yet for ${today}.`);
         } else {
           setRaw(txt);
         }
       })
-      .catch(() => setRaw(`# NBA Daily Pulse — ${new Date().toISOString().slice(0,10)}\nUnable to load post.`))
+      .catch(() => setRaw(`# NBA Daily Pulse — ${today}\nUnable to load post.`)) // NEW
       .finally(() => setLoaded(true));
   }, []);
 
@@ -126,34 +112,20 @@ export default function Blog() {
             Updated daily · Original summaries based on the app’s calendar, matchup helper, and Model edge.
           </Typography>
           <Divider sx={{ mb: 3 }} />
-
-          {/* top ad placement */}
           <AdUnit slot="blog-top-slot" />
-
           {!loaded ? (
             <Typography variant="body2" sx={{ opacity: 0.7 }}>Loading daily post…</Typography>
           ) : (
-            <Box
-              sx={{
-                "& h2": { fontSize: "1.25rem", fontWeight: 700, mt: 3, mb: 1 },
-                "& p": { mb: 1.5, lineHeight: 1.7 },
-                "& ul": { pl: 3, mb: 2 },
-                "& li": { mb: 0.5 },
-                "& hr": { my: 3, opacity: 0.2 },
-              }}
-            >
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  li: MdListItem, // <-- our enhanced list item with bar
-                }}
-              >
+            <Box sx={{ "& h2": { fontSize: "1.25rem", fontWeight: 700, mt: 3, mb: 1 },
+                       "& p": { mb: 1.5, lineHeight: 1.7 },
+                       "& ul": { pl: 3, mb: 2 },
+                       "& li": { mb: 0.5 },
+                       "& hr": { my: 3, opacity: 0.2 } }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ li: MdListItem }}>
                 {bodyMd}
               </ReactMarkdown>
             </Box>
           )}
-
-          {/* bottom ad placement */}
           <AdUnit slot="blog-bottom-slot" />
         </CardContent>
       </Card>

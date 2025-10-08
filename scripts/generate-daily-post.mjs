@@ -12,7 +12,13 @@ const root = join(here, "..");
 const BLOG_DIR = join(root, "public", "blog");
 const UPCOMING_JSON = join(root, "public", "upcoming-3mo.json");
 
-function isoDate(d = new Date()) { return new Date(d).toISOString().slice(0,10); }
+function localISODate(tz = "America/Toronto", d = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(d);
+  const get = (t) => parts.find(p => p.type === t)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
 
 async function readUpcoming() {
   try { return JSON.parse(await readFile(UPCOMING_JSON, "utf8")); } catch { return []; }
