@@ -582,9 +582,6 @@ export default function AllGamesCalendar(){
         </CardContent>
       </Card>
 
-      {/* 👇 Daily original content */}
-      <HaikuOfTheDay compact look="typewriter" />
-
       {/* header */}
       <Box
         sx={{
@@ -726,6 +723,9 @@ export default function AllGamesCalendar(){
 
       {/* drawer */}
       <ComparisonDrawer open={compareOpen} onClose={()=> setCompareOpen(false)} game={compareGame} />
+
+      {/* 👇 Daily original content */}
+      <HaikuOfTheDay compact look="typewriter" />
 
       {/* news */}
       <NbaNews />
