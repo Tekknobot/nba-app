@@ -9,6 +9,7 @@ import Header from "./components/Header";
 import GamePage from "./components/GamePage";
 import Privacy from "./components/Privacy";
 import Blog from "./components/Blog";
+import { Analytics } from "@vercel/analytics/react";
 
 export default function App() {
   return (
@@ -25,6 +26,9 @@ export default function App() {
           <Route path="/blog" element={<Blog />} />
         </Routes>
       </Box>
+
+      {/* Mount analytics once so it runs on all pages */}
+      <Analytics />
     </BrowserRouter>
   );
 }
