@@ -3,7 +3,6 @@ import React from "react";
 import { Box, Card, CardContent, Typography, Divider, LinearProgress, Stack } from "@mui/material";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import AdUnit from "./AdUnit";
 
 function stripFrontMatter(md) {
   const fm = /^---\s*[\s\S]*?---\s*/;
@@ -112,7 +111,7 @@ export default function Blog() {
             Updated daily · Original summaries based on the app’s calendar, matchup helper, and Model edge.
           </Typography>
           <Divider sx={{ mb: 3 }} />
-          <AdUnit slot="blog-top-slot" />
+
           {!loaded ? (
             <Typography variant="body2" sx={{ opacity: 0.7 }}>Loading daily post…</Typography>
           ) : (
@@ -126,7 +125,7 @@ export default function Blog() {
               </ReactMarkdown>
             </Box>
           )}
-          <AdUnit slot="blog-bottom-slot" />
+
         </CardContent>
       </Card>
     </Box>

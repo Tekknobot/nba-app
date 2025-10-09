@@ -7,22 +7,22 @@ import About from "./components/About";
 import Contact from "./components/Contact";
 import Header from "./components/Header";
 import GamePage from "./components/GamePage";
-import Privacy from "./components/Privacy";   
-import Blog from "./components/Blog";         
+import Privacy from "./components/Privacy";
+import Blog from "./components/Blog";
 
-export default function App(){
+export default function App() {
   return (
     <BrowserRouter>
       <Header />
-      <Box sx={{ p:2 }}>
+      <Box sx={{ p: 2 }}>
         <Routes>
           <Route path="/" element={<Navigate to="/all" replace />} />
           <Route path="/all" element={<AllGamesCalendar />} />
           <Route path="/game/:id" element={<GamePage />} />
           <Route path="/about" element={<About />} />
           <Route path="/contact" element={<Contact />} />
-          <Route path="/privacy" element={<Privacy />} />  
-          <Route path="/blog" element={<Blog />} />                 
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/blog" element={<Blog />} />
         </Routes>
       </Box>
     </BrowserRouter>
