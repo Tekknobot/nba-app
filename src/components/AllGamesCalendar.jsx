@@ -725,8 +725,10 @@ export default function AllGamesCalendar(){
       <ComparisonDrawer open={compareOpen} onClose={()=> setCompareOpen(false)} game={compareGame} />
 
       {/* 👇 Daily original content */}
-      <HaikuOfTheDay compact look="typewriter" />
-
+      <Box sx={{ mt: 2 }}>
+        <HaikuOfTheDay compact look="typewriter" />
+      </Box>
+      
       {/* news */}
       <NbaNews />
     </Box>
