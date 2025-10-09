@@ -27,11 +27,6 @@ export default function About() {
             The developer of PIVT does not collect, store, or share any personal user data.
             The app has no accounts and does not track individual usage.
           </Typography>
-          <Typography variant="body1" sx={{ mb: 2 }}>
-            Any ads are served by third-party providers (e.g., Google AdSense). Those providers
-            may use cookies or similar technologies to deliver more relevant ads. PIVT itself
-            does not distribute, sell, or share private user information.
-          </Typography>
 
           <Divider sx={{ my: 3 }} />
 
