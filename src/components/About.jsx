@@ -1,6 +1,6 @@
 // src/components/About.jsx
 import React from "react";
-import { Box, Card, CardContent, Typography, Divider } from "@mui/material";
+import { Box, Card, CardContent, Typography, Divider, Button } from "@mui/material";
 
 export default function About() {
   return (
@@ -30,7 +30,7 @@ export default function About() {
 
           <Divider sx={{ my: 3 }} />
 
-          {/* Model Edge Section (aligned with implementation) */}
+          {/* Model Edge Section */}
           <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
             How “Model edge” Works
           </Typography>
@@ -103,7 +103,7 @@ export default function About() {
 
           <Divider sx={{ my: 3 }} />
 
-          {/* Data Sources / Tech */}
+          {/* Data & Tech */}
           <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
             Data & Tech
           </Typography>
@@ -113,9 +113,9 @@ export default function About() {
             avoid day slips across time zones where possible.
           </Typography>
 
-          {/* Accuracy & Disclaimer */}
           <Divider sx={{ my: 3 }} />
 
+          {/* Accuracy & Disclaimer */}
           <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
             Accuracy & Disclaimer
           </Typography>
@@ -158,7 +158,38 @@ export default function About() {
             information is provided “as is” without warranties and that you bear sole responsibility for
             how you use it. PIVT does not solicit, promote, or facilitate gambling.
           </Typography>
-          
+
+          <Divider sx={{ my: 3 }} />
+
+          {/* Support */}
+          <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
+            Support
+          </Typography>
+          <Typography variant="body1" sx={{ mb: 2, opacity: 0.9 }}>
+            PIVT is free and ad-free. I cover the data and hosting myself. If it makes your game days
+            smoother and you’d like to support the project, you can buy me a coffee:
+          </Typography>
+
+          <Button
+            href="https://www.buymeacoffee.com/pizzzamoney" // replace if needed
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{
+              backgroundColor: "#FFDD00",
+              color: "#000",
+              fontWeight: 700,
+              borderRadius: 2,
+              px: 2.5,
+              py: 1.25,
+              "&:hover": { backgroundColor: "#ffe666" }
+            }}
+          >
+            ☕ Buy Me a Coffee
+          </Button>
+
+          <Typography variant="caption" sx={{ display: "block", mt: 1.5, opacity: 0.7 }}>
+            100% optional — contributions help cover API and hosting costs.
+          </Typography>
         </CardContent>
       </Card>
     </Box>
