@@ -17,17 +17,13 @@ export default function Privacy() {
           <Typography variant="body1" sx={{ mb: 2 }}>
             PIVT does not collect, store, or sell personal information. We don’t run accounts or track individual usage.
           </Typography>
-          <Typography variant="body1" sx={{ mb: 2 }}>
-            Ads on PIVT are provided by third parties (e.g., Google AdSense) which may use cookies or local storage to
-            personalize or measure ads. Learn more and control your choices in the consent banner.
-          </Typography>
 
           <Divider sx={{ my: 3 }} />
 
-          <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>Cookies & Ads</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>Cookies & Storage</Typography>
           <Typography variant="body1" sx={{ mb: 2 }}>
-            We use Google services that may set cookies or similar identifiers. You can grant or deny consent for ad
-            personalization and measurement. Non-personalized ads may still appear.
+            PIVT does not use advertising cookies or third-party trackers. We do not run ads.
+            Your browser may perform standard caching to improve performance; PIVT does not use this to identify you.
           </Typography>
 
           <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>Contact</Typography>
