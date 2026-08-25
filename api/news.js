@@ -83,6 +83,22 @@ async function fetchWithRetry(url, { headers = {}, timeoutMs = 3500, retries = 2
   throw lastErr;
 }
 
+function pickImageFromItem(it) {
+  const media = Array.isArray(it?.["media:content"]) ? it["media:content"][0] : it?.["media:content"];
+  const thumb = Array.isArray(it?.["media:thumbnail"]) ? it["media:thumbnail"][0] : it?.["media:thumbnail"];
+  const enclosure = Array.isArray(it?.enclosure) ? it.enclosure[0] : it?.enclosure;
+  const candidates = [
+    media?.url, media?.href, thumb?.url, thumb?.href, enclosure?.url, enclosure?.href,
+    it?.image?.url, it?.image?.href, typeof it?.image === "string" ? it.image : "",
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) return candidate;
+  }
+  const html = String(it?.description || it?.["content:encoded"] || "");
+  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return match?.[1] && /^https?:\/\//i.test(match[1]) ? match[1] : "";
+}
+
 async function fetchFeed(feed, parser, ua) {
   try {
     const r = await fetchWithRetry(feed.url, {
@@ -118,8 +134,9 @@ async function fetchFeed(feed, parser, ua) {
         link: it?.link || it?.guid || "",
         pubDate: it?.pubDate || it?.published || it?.updated || "",
         source: feed.source,
+        image: pickImageFromItem(it),
         isInjury,
-        injuryHits: hits, // optional: useful for debugging/analytics
+        injuryHits: hits,
         };
     })
     .filter((x) => x.title && x.link);

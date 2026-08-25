@@ -1,2 +1,59 @@
-html, body, #root { height: 100%; margin: 0; }
+html, body, #root { min-height: 100%; margin: 0; }
 * { box-sizing: border-box; }
+html { background: #080d16; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 15% -10%, rgba(59,130,246,.13), transparent 34rem),
+    radial-gradient(circle at 88% 0%, rgba(240,68,100,.08), transparent 26rem),
+    #080d16;
+  background-attachment: fixed;
+}
+a { color: inherit; }
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(145deg, #3b82f6, #245bd3);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 8px 24px rgba(37,99,235,.22);
+}
+.pivt-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.pivt-hero::after {
+  content: "";
+  position: absolute;
+  width: 390px;
+  height: 390px;
+  border-radius: 50%;
+  right: -165px;
+  top: -235px;
+  background: radial-gradient(circle, rgba(59,130,246,.20), rgba(59,130,246,0) 67%);
+  pointer-events: none;
+  z-index: -1;
+}
+.status-orb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  margin-top: 5px;
+  box-shadow: 0 0 0 5px rgba(255,255,255,.035);
+}
+.status-orb.offseason { background: #f5b942; box-shadow: 0 0 0 5px rgba(245,185,66,.08), 0 0 18px rgba(245,185,66,.20); }
+.status-orb.active { background: #43c59e; box-shadow: 0 0 0 5px rgba(67,197,158,.08), 0 0 18px rgba(67,197,158,.20); }
+.news-image-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(145deg, rgba(59,130,246,.10), rgba(255,255,255,.025));
+}
+@media (max-width: 600px) {
+  body { background-attachment: scroll; }
+  .brand-mark { width: 32px; height: 32px; }
+}

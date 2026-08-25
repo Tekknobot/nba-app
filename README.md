@@ -1,8 +1,18 @@
 # PIVT — NBA Calendar & Matchup Helper
 
-A clean, mobile-friendly NBA schedule and matchup helper.
+A responsive desktop-and-mobile NBA schedule, scores, recent-form, and league-news dashboard.
 
 Browse games by date, compare each team’s last 10 completed regular-season games, review the current season series, and see compact player stat snapshots.
+
+
+## 2026 redesign
+
+- Desktop two-column dashboard with a larger game workspace and league-news sidebar
+- Mobile-first date rail and full-width matchup drawer
+- Explicit offseason status; as of August 2026 the site notes that the league is between regular seasons
+- ESPN-provided team logos with code fallbacks
+- Player headshots and RSS story images when public source data supplies them
+- About, Privacy, and Contact pages/routes removed
 
 ## Data
 

@@ -1,4 +1,3 @@
-// --- Fast Refresh guard (prevents "_s is not a function" in dev) ---
 if (typeof self !== "undefined") {
   self.$RefreshSig$ = self.$RefreshSig$ || (() => (type) => type);
   self.$RefreshReg$ = self.$RefreshReg$ || (() => {});
@@ -6,131 +5,89 @@ if (typeof self !== "undefined") {
 
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { ThemeProvider, createTheme, alpha } from "@mui/material/styles";
+import CssBaseline from "@mui/material/CssBaseline";
+import "@fontsource/bebas-neue";
 import App from "./App";
 import "./index.css";
 
-import { ThemeProvider, createTheme, alpha } from "@mui/material/styles";
-import CssBaseline from "@mui/material/CssBaseline";
-
-// ---- Theme (mid-dark, clean) ----
-const NBA_BLUE = "#17408B";
-const NBA_RED  = "#C9082A";
-const INK      = "#161B22"; // app bg (midnight slate)
-const PAPER    = "#1F2631"; // card bg (softer contrast)
+const BLUE = "#3B82F6";
+const RED = "#F04464";
+const BG = "#080D16";
+const PAPER = "#101826";
 
 const theme = createTheme({
   palette: {
     mode: "dark",
-    primary:   { main: NBA_BLUE },
-    secondary: { main: NBA_RED },
-    background: { default: INK, paper: PAPER },
-    divider: "rgba(255,255,255,0.18)",
-    text: {
-      primary:  "rgba(255,255,255,0.92)",
-      secondary:"rgba(255,255,255,0.72)",
-    },
+    primary: { main: BLUE },
+    secondary: { main: RED },
+    background: { default: BG, paper: PAPER },
+    divider: "rgba(255,255,255,0.10)",
+    text: { primary: "#F6F8FC", secondary: "rgba(224,231,242,0.70)" },
+    success: { main: "#43C59E" },
+    warning: { main: "#F5B942" },
+    error: { main: "#F04464" },
     action: {
-      hover: alpha("#ffffff", 0.08),
-      selected: alpha(NBA_BLUE, 0.16),
-      focus: alpha(NBA_RED, 0.20),
-      disabledOpacity: 0.38,
+      hover: alpha("#ffffff", 0.065),
+      selected: alpha(BLUE, 0.18),
+      focus: alpha(BLUE, 0.25),
+      disabledOpacity: 0.4,
     },
   },
-  shape: { borderRadius: 12 },
+  shape: { borderRadius: 14 },
   typography: {
-    h1: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 1, fontWeight: 400 },
-    h2: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 1, fontWeight: 400 },
-    h3: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 0.8, fontWeight: 400 },
-    h4: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 0.6, fontWeight: 400 },
-    h5: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 0.5, fontWeight: 400 },
-    h6: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 0.5, fontWeight: 400 },
-    subtitle1: { fontWeight: 700 },
-    subtitle2: { fontWeight: 700 },
-    button: { fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase" },
+    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    h4: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 0.9 },
+    h5: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 0.8, fontSize: "1.8rem" },
+    h6: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 0.8, fontSize: "1.4rem" },
+    subtitle1: { fontWeight: 800 },
+    subtitle2: { fontWeight: 800 },
+    button: { fontWeight: 850, letterSpacing: 0.2, textTransform: "none" },
+    overline: { fontWeight: 900, fontSize: "0.66rem", lineHeight: 1.5 },
   },
   components: {
     MuiCssBaseline: {
-      // No background images; let palette drive body bg.
-      styleOverrides: (t) => ({
-        body: { backgroundColor: t.palette.background.default },
-        "*::-webkit-scrollbar": { height: 8, width: 8 },
-        "*::-webkit-scrollbar-thumb": {
-          backgroundColor: alpha("#fff", 0.2),
-          borderRadius: 8,
-        },
-        "*::-webkit-scrollbar-thumb:hover": {
-          backgroundColor: alpha("#fff", 0.3),
-        },
-      }),
-    },
-    MuiCard: {
       styleOverrides: {
-        root: {
-          background: `linear-gradient(180deg, ${alpha("#ffffff",0.03)} 0%, ${alpha("#ffffff",0.00)} 60%)`,
-          border: `1px solid ${alpha("#ffffff", 0.12)}`,
-          boxShadow: `0 10px 24px ${alpha("#000", 0.28)}`,
-        },
+        body: { backgroundColor: BG },
+        "*::selection": { backgroundColor: alpha(BLUE, 0.38) },
+        "*::-webkit-scrollbar": { height: 8, width: 8 },
+        "*::-webkit-scrollbar-thumb": { backgroundColor: "rgba(255,255,255,.18)", borderRadius: 10 },
       },
     },
     MuiPaper: { styleOverrides: { root: { backgroundImage: "none" } } },
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          backgroundColor: PAPER,
+          backgroundImage: "linear-gradient(180deg, rgba(255,255,255,.018), rgba(255,255,255,0))",
+          borderColor: "rgba(255,255,255,.10)",
+          boxShadow: "0 18px 45px rgba(0,0,0,.18)",
+        },
+      },
+    },
     MuiButton: {
       defaultProps: { disableElevation: true },
       styleOverrides: {
-        root: {
-          borderRadius: 12,
-          paddingInline: 16,
-          "&:hover": { boxShadow: `0 0 0 2px ${alpha(NBA_BLUE, 0.22)} inset` },
-        },
-        containedPrimary: {
-          background: `linear-gradient(180deg, ${NBA_BLUE}, ${alpha(NBA_BLUE, 0.9)})`,
-        },
-        containedSecondary: {
-          background: `linear-gradient(180deg, ${NBA_RED}, ${alpha(NBA_RED, 0.9)})`,
-        },
-        outlined: {
-          borderColor: alpha("#fff", 0.22),
-          backgroundColor: alpha("#fff", 0.06),
-        },
+        root: { borderRadius: 11 },
+        containedPrimary: { background: `linear-gradient(135deg, ${BLUE}, #2563EB)` },
+        outlined: { borderColor: "rgba(255,255,255,.16)", backgroundColor: "rgba(255,255,255,.025)" },
       },
+    },
+    MuiIconButton: {
+      styleOverrides: { root: { borderRadius: 11, border: "1px solid rgba(255,255,255,.08)" } },
     },
     MuiChip: {
       styleOverrides: {
-        root: { borderRadius: 999, fontWeight: 800, letterSpacing: 0.3 },
-        outlined: { borderColor: alpha("#fff", 0.26), backgroundColor: alpha("#fff", 0.06) },
+        root: { borderRadius: 999, fontWeight: 800 },
+        outlined: { borderColor: "rgba(255,255,255,.15)", backgroundColor: "rgba(255,255,255,.025)" },
       },
     },
-    MuiListItemButton: {
-      styleOverrides: {
-        root: {
-          borderRadius: 8,
-          transition: "transform 80ms ease, background-color 120ms ease",
-          "&:hover": { backgroundColor: alpha(NBA_BLUE, 0.10), transform: "translateY(-1px)" },
-          "&.Mui-selected": {
-            backgroundColor: alpha(NBA_RED, 0.16),
-            "&:hover": { backgroundColor: alpha(NBA_RED, 0.20) },
-          },
-        },
-      },
-    },
-    MuiTooltip: {
-      styleOverrides: {
-        tooltip: {
-          fontWeight: 700,
-          border: `1px solid ${alpha("#fff", 0.12)}`,
-          background: `linear-gradient(180deg, ${alpha("#000",0.78)}, ${alpha("#000",0.64)})`,
-        },
-      },
-    },
-    MuiLinearProgress: {
-      styleOverrides: { bar: { boxShadow: `0 0 10px ${alpha(NBA_BLUE, 0.35)}` } },
-    },
-    MuiDivider: { styleOverrides: { root: { borderColor: "rgba(255,255,255,0.18)" } } },
+    MuiDrawer: { styleOverrides: { paper: { backgroundColor: "#0C1320" } } },
+    MuiDivider: { styleOverrides: { root: { borderColor: "rgba(255,255,255,.09)" } } },
   },
 });
 
-// ---- Mount app ----
-const root = createRoot(document.getElementById("root"));
-root.render(
+createRoot(document.getElementById("root")).render(
   <ThemeProvider theme={theme}>
     <CssBaseline />
     <App />

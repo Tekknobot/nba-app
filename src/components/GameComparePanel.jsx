@@ -6,6 +6,7 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
+import { logoForTeam } from "../utils/teamAssets";
 
 // Explain *why* there is no current-season data at the selected anchor date
 function noDataReason(anchorISO) {
@@ -85,7 +86,7 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
   return (
     <Chip
       avatar={
-        <Avatar sx={{
+        <Avatar src={avg?.image || ""} alt="" sx={{
           width:22, height:22, fontSize:12,
           bgcolor:(t)=>t.palette.action.hover,
           color:(t)=>t.palette.text.primary,
@@ -241,9 +242,18 @@ function NarrativeBlock({ game, a, b, h2h }) {
   return (
     <Card variant="outlined" sx={{ borderRadius:1 }}>
       <CardContent sx={{ p:2 }}>
-        <Typography component="h2" variant="subtitle1" sx={{ fontWeight:700, mb:0.5 }}>
-          {isFinal ? "Game recap" : isLive ? "Live update" : "Game preview"}
-        </Typography>
+        <Stack direction="row" alignItems="center" spacing={1.25} sx={{ mb:1.25 }}>
+          <Stack direction="row" spacing={-0.6}>
+            <Avatar src={logoForTeam(game?.away)} alt="" sx={{ width:36, height:36, p:0.5, bgcolor:'rgba(255,255,255,.05)', '& img':{ objectFit:'contain' } }}>{awayCode}</Avatar>
+            <Avatar src={logoForTeam(game?.home)} alt="" sx={{ width:36, height:36, p:0.5, bgcolor:'rgba(255,255,255,.05)', '& img':{ objectFit:'contain' } }}>{homeCode}</Avatar>
+          </Stack>
+          <Box>
+            <Typography component="h2" variant="subtitle1" sx={{ fontWeight:800, lineHeight:1.15 }}>
+              {isFinal ? "Game recap" : isLive ? "Live update" : "Game preview"}
+            </Typography>
+            <Typography variant="caption" sx={{ color:'text.secondary' }}>{awayCode} @ {homeCode}</Typography>
+          </Box>
+        </Stack>
 
         <Typography variant="body2" sx={{ mb: isFinal ? 0.5 : 1 }}>
           {headline}

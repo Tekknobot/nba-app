@@ -1,8 +1,17 @@
-// src/components/GamePage.jsx
 import React, { useEffect, useState } from "react";
 import { useParams, Link as RouterLink } from "react-router-dom";
-import { Box, Typography } from "@mui/material";
+import { Avatar, Box, Button, Card, CardContent, CircularProgress, Stack, Typography } from "@mui/material";
+import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import GameComparePanel from "./GameComparePanel";
+import { logoForTeam } from "../utils/teamAssets";
+
+function Logo({ team }) {
+  return (
+    <Avatar src={logoForTeam(team)} alt={`${team?.name || team?.code} logo`} sx={{ width: { xs: 52, sm: 68 }, height: { xs: 52, sm: 68 }, p: 0.75, bgcolor: "rgba(255,255,255,.06)", "& img": { objectFit: "contain" } }}>
+      {team?.code}
+    </Avatar>
+  );
+}
 
 export default function GamePage() {
   const { id } = useParams();
@@ -30,42 +39,39 @@ export default function GamePage() {
     return () => { ok = false; };
   }, [id]);
 
-  if (err) {
-    return (
-      <Box sx={{ maxWidth: 720, mx: "auto", p: 2 }}>
-        <Typography variant="h6">Game</Typography>
-        <Typography color="warning.main" sx={{ mt: 1, whiteSpace: "pre-wrap" }}>{String(err)}</Typography>
-        <Typography sx={{ mt: 2 }}>
-          <RouterLink to="/all">← Back to calendar</RouterLink>
-        </Typography>
-      </Box>
-    );
-  }
-
-  if (!game) {
-    return (
-      <Box sx={{ maxWidth: 720, mx: "auto", p: 2 }}>
-        <Typography variant="h6">Loading game…</Typography>
-      </Box>
-    );
-  }
-
-  const title = `${game.away?.code || "AWAY"} @ ${game.home?.code || "HOME"}`;
-
   return (
-    <Box sx={{ maxWidth: 720, mx: "auto", p: 2 }}>
-      <Typography variant="h4" sx={{ fontWeight: 700 }}>{title}</Typography>
-      <Typography variant="body2" sx={{ opacity: 0.85, mt: 0.5 }}>
-        {game.away?.name} at {game.home?.name}
-      </Typography>
+    <Box sx={{ maxWidth: 1120, mx: "auto", px: { xs: 1.25, sm: 2.5 }, py: { xs: 1.5, sm: 3 } }}>
+      <Button component={RouterLink} to="/all" startIcon={<ArrowBackRoundedIcon />} size="small" variant="text" sx={{ mb: 1.5 }}>
+        Games
+      </Button>
 
-      <Box sx={{ mt: 2 }}>
-        <GameComparePanel game={game} />
-      </Box>
-
-      <Typography variant="body2" sx={{ mt: 2 }}>
-        <RouterLink to="/all">← Back to calendar</RouterLink>
-      </Typography>
+      {err ? (
+        <Card variant="outlined" sx={{ borderRadius: 3 }}><CardContent><Typography variant="h6">Game unavailable</Typography><Typography color="warning.main" sx={{ mt: 1 }}>{String(err)}</Typography></CardContent></Card>
+      ) : !game ? (
+        <Stack alignItems="center" sx={{ py: 10 }} spacing={1}><CircularProgress size={24} /><Typography variant="body2" sx={{ color: "text.secondary" }}>Loading game…</Typography></Stack>
+      ) : (
+        <>
+          <Card className="pivt-hero" variant="outlined" sx={{ borderRadius: 4, mb: 2 }}>
+            <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+              <Stack direction="row" alignItems="center" justifyContent="center" spacing={{ xs: 1.25, sm: 2.5 }}>
+                <Stack alignItems="center" spacing={0.6} sx={{ flex: 1, minWidth: 0 }}>
+                  <Logo team={game.away} />
+                  <Typography variant="h6" noWrap>{game.away?.code}</Typography>
+                  <Typography variant="caption" sx={{ color: "text.secondary", textAlign: "center" }}>{game.away?.name}</Typography>
+                </Stack>
+                <Typography sx={{ fontFamily: '"Bebas Neue", sans-serif', fontSize: { xs: 32, sm: 46 }, color: "text.secondary" }}>@</Typography>
+                <Stack alignItems="center" spacing={0.6} sx={{ flex: 1, minWidth: 0 }}>
+                  <Logo team={game.home} />
+                  <Typography variant="h6" noWrap>{game.home?.code}</Typography>
+                  <Typography variant="caption" sx={{ color: "text.secondary", textAlign: "center" }}>{game.home?.name}</Typography>
+                </Stack>
+              </Stack>
+              <Typography variant="body2" sx={{ color: "text.secondary", textAlign: "center", mt: 1.5 }}>{game.status}</Typography>
+            </CardContent>
+          </Card>
+          <GameComparePanel game={game} />
+        </>
+      )}
     </Box>
   );
 }

@@ -1,49 +1,70 @@
-// src/components/AllGamesCalendar.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Box, Card, CardContent, Chip, IconButton, Stack, Typography,
-  Drawer, Divider, List, ListItem, ListItemText, Button,
-  CircularProgress, Tooltip, ListItemButton, Avatar
+  Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Divider,
+  Drawer, IconButton, Stack, Typography, useMediaQuery
 } from "@mui/material";
-import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import CloseIcon from "@mui/icons-material/Close";
-import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
+import { useTheme } from "@mui/material/styles";
+import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
+import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
+import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
+import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
+import SportsBasketballRoundedIcon from "@mui/icons-material/SportsBasketballRounded";
+import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
+import WifiRoundedIcon from "@mui/icons-material/WifiRounded";
 import "@fontsource/bebas-neue";
 
-import SportsBasketballIcon from "@mui/icons-material/SportsBasketball";
 import GameComparePanel from "./GameComparePanel";
-
-import { formatGameLabel } from "../utils/datetime";
 import NbaNews from "./NbaNews";
-
-import Link from "@mui/material/Link";
-import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
-import { Link as RouterLink } from "react-router-dom";
-
 import HaikuOfTheDay from "./HaikuOfTheDay";
+import { formatGameLabel } from "../utils/datetime";
+import { logoForTeam, stageLabel } from "../utils/teamAssets";
 
-// Rough NBA calendar: regular season runs Oct–Jun; offseason Jul–Sep
-function isOffseasonMonth(d = new Date()) {
-  const m = d.getMonth(); // 0..11
-  return m >= 6 && m <= 8; // Jul (6), Aug (7), Sep (8)
+function firstOfMonth(d) {
+  const x = new Date(d);
+  x.setDate(1);
+  x.setHours(0, 0, 0, 0);
+  return x;
 }
-
-// Does the eventsMap have any games at all this month?
-function mapHasAnyGames(map) {
-  for (const arr of map.values()) {
-    if (Array.isArray(arr) && arr.length) return true;
+function addMonths(d, n) {
+  const x = new Date(d);
+  x.setDate(1);
+  x.setMonth(x.getMonth() + n);
+  return x;
+}
+function dateKeyFromDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function daysInMonth(year, month) {
+  const out = [];
+  const d = new Date(year, month, 1);
+  while (d.getMonth() === month) {
+    out.push(new Date(d));
+    d.setDate(d.getDate() + 1);
   }
+  return out;
+}
+function isOffseasonMonth(d = new Date()) {
+  const m = d.getMonth();
+  return m >= 6 && m <= 8;
+}
+function mapHasAnyGames(map) {
+  for (const arr of map.values()) if (Array.isArray(arr) && arr.length) return true;
   return false;
 }
+function nextOctober(from = new Date()) {
+  const y = from.getFullYear();
+  return new Date(y, 9, 1);
+}
+function isFinal(game) {
+  return /final/i.test(String(game?.status || ""));
+}
+function isLive(game) {
+  return /in progress|halftime|end of|quarter|q\d/i.test(String(game?.status || ""));
+}
+function scoreValue(v) {
+  return Number.isFinite(Number(v)) ? Number(v) : null;
+}
 
-/* ========= small date helpers ========= */
-function firstOfMonth(d){ const x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
-function addMonths(d,n){ const x=new Date(d); x.setDate(1); x.setMonth(x.getMonth()+n); return x; }
-function dateKeyFromDate(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
-function daysInMonth(year, month){ const out=[]; const d=new Date(year,month,1); while(d.getMonth()===month){ out.push(new Date(d)); d.setDate(d.getDate()+1); } return out; }
-
-/* ========= keyless month schedule fetch ========= */
 async function fetchMonthSchedulePublic(year, monthIndex) {
   const params = new URLSearchParams({
     action: "month",
@@ -56,513 +77,428 @@ async function fetchMonthSchedulePublic(year, monthIndex) {
   return Array.isArray(json?.games) ? json.games : [];
 }
 
-/* ========= Drawer (uses shared panel) ========= */
+function TeamLogo({ team, size = 50 }) {
+  return (
+    <Avatar
+      src={logoForTeam(team)}
+      alt={`${team?.name || team?.code || "NBA team"} logo`}
+      sx={{
+        width: size,
+        height: size,
+        bgcolor: "rgba(255,255,255,.07)",
+        border: "1px solid rgba(255,255,255,.10)",
+        p: 0.65,
+        color: "text.primary",
+        fontSize: Math.max(10, Math.round(size * 0.25)),
+        fontWeight: 900,
+        "& img": { objectFit: "contain" },
+      }}
+    >
+      {team?.code || "NBA"}
+    </Avatar>
+  );
+}
+
 function ComparisonDrawer({ open, onClose, game }) {
+  const theme = useTheme();
+  const phone = useMediaQuery(theme.breakpoints.down("sm"));
   if (!open || !game) return null;
+
   return (
     <Drawer
-      anchor="right" open={open} onClose={onClose}
-      PaperProps={{ sx:{ width:{ xs:'100%', sm:620 }, p:2, borderTopLeftRadius:{ xs:1, sm:0 }, display:'flex', flexDirection:'column', height:'100vh', boxSizing:'border-box' } }}
+      anchor={phone ? "bottom" : "right"}
+      open={open}
+      onClose={onClose}
+      PaperProps={{
+        sx: phone
+          ? { height: "92vh", borderRadius: "22px 22px 0 0", p: 1.5 }
+          : { width: 700, maxWidth: "46vw", p: 2.5 },
+      }}
     >
-      {/* header */}
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb:2 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight:700 }}>
-          Recent form — {game?.away?.code} @ {game?.home?.code}
-        </Typography>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <IconButton onClick={onClose}><CloseIcon /></IconButton>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
+        <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 0 }}>
+          <Stack direction="row" spacing={-0.8}>
+            <TeamLogo team={game.away} size={38} />
+            <TeamLogo team={game.home} size={38} />
+          </Stack>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="overline" sx={{ color: "text.secondary", lineHeight: 1 }}>MATCHUP</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 900 }} noWrap>
+              {game?.away?.code} @ {game?.home?.code}
+            </Typography>
+          </Box>
         </Stack>
+        <IconButton onClick={onClose} aria-label="Close matchup panel"><CloseRoundedIcon /></IconButton>
       </Stack>
-
-      <Divider sx={{ mb:1 }} />
-
-      {/* body */}
-      <Box sx={{ flex:1, minHeight:0, overflow:'auto', pr:0.5 }}>
-        <Typography variant="caption" sx={{ opacity:0.8, mb:1, display:'block' }}>
-          Clicked game: {game?.away?.name} at {game?.home?.name}
-        </Typography>
+      <Divider sx={{ mb: 1.5 }} />
+      <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", pb: 2 }}>
         <GameComparePanel game={game} />
-      </Box>
-
-      {/* footer */}
-      <Box sx={{ position:'sticky', bottom:0, pt:1.5, background:(t)=>`linear-gradient(180deg, ${t.palette.background.default}00, ${t.palette.background.default} 40%)` }}>
-        <Tooltip title="Close">
-          <Button variant="contained" onClick={onClose} fullWidth>Close</Button>
-        </Tooltip>
       </Box>
     </Drawer>
   );
 }
 
-/* ========= Agenda card ========= */
-function isFinal(game){ return (game?.status || "").toLowerCase().includes("final"); }
-function resultMeta(game){
-  if (!isFinal(game)) return null;
-  const home = game.home?.code || "HOME";
-  const away = game.away?.code || "AWAY";
-  const hs = Number(game.homeScore ?? 0);
-  const as = Number(game.awayScore ?? 0);
-  const homeWon = hs > as;
-  const winnerTeam = homeWon ? home : away;
-  const loserTeam  = homeWon ? away : home;
-  const winnerPts  = homeWon ? hs   : as;
-  const loserPts   = homeWon ? as   : hs;
-  return { lines:[`${winnerTeam} ${winnerPts}`, `${loserTeam} ${loserPts}`], homeWon };
+function TeamLine({ team, score, winner, homeAway }) {
+  return (
+    <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0 }}>
+      <TeamLogo team={team} size={46} />
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Stack direction="row" spacing={0.75} alignItems="baseline" sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontWeight: winner ? 900 : 750, fontSize: { xs: 16, sm: 17 } }} noWrap>
+            {team?.code}
+          </Typography>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>{homeAway}</Typography>
+        </Stack>
+        <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }} noWrap>
+          {team?.name}
+        </Typography>
+      </Box>
+      {score !== null && (
+        <Typography sx={{ fontFamily: '"Bebas Neue", sans-serif', fontSize: { xs: 31, sm: 36 }, lineHeight: 1, letterSpacing: 0.6 }}>
+          {score}
+        </Typography>
+      )}
+    </Stack>
+  );
 }
 
 function GameCard({ game, onPick }) {
-  const final = resultMeta(game);
-  const isLive = /in progress|halftime|end of|quarter|q\d/i.test((game?.status || "").toLowerCase());
-  const titleCodes = `${game.away.code} @ ${game.home.code}`;
-  const subLine = `${game.away.name} at ${game.home.name}`;
+  const final = isFinal(game);
+  const live = isLive(game);
+  const hs = scoreValue(game?.homeScore);
+  const as = scoreValue(game?.awayScore);
+  const homeWon = final && hs !== null && as !== null && hs > as;
+  const awayWon = final && hs !== null && as !== null && as > hs;
 
-  // Short live status like "End Q3"
-  const liveStatusLabel = (() => {
-    const s = String(game?.status || "");
-    const m = s.match(/end of\s*(\d)/i);
-    if (m) return `End Q${m[1]}`;
-    return s;
-  })();
-
-  // Small animated dot for "Live"
-  const LiveDot = (
-    <Box
-      sx={{
-        width: 8, height: 8, borderRadius: '50%',
-        bgcolor: 'warning.main',
-        '@keyframes pulse': { '0%': { transform:'scale(1)' }, '50%': { transform:'scale(1.4)' }, '100%': { transform:'scale(1)' } },
-        animation: 'pulse 1.3s ease-in-out infinite'
-      }}
-    />
-  );
-
-  // trailing status cluster (right side)
-  const RightStatus = final ? (
-    <Stack direction="column" spacing={0.25} sx={{ alignItems: 'flex-end', flexShrink: 0 }}>
-      <Chip size="small" color="success" label="Final" sx={{ height: 22 }} />
-      <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
-        {final.lines[0]}
-      </Typography>
-      <Typography variant="body2" sx={{ opacity: 0.9, lineHeight: 1.1 }}>
-        {final.lines[1]}
-      </Typography>
-      {(() => {
-        const v = modelVerdict(game);
-        if (!v) return null;
-        return v.state === "correct" ? (
-          <Tooltip title={v.tooltip}>
-            <Chip size="small" color="success" variant="outlined" icon={<CheckCircleIcon fontSize="small" />} label="Model" sx={{ mt: 0.25 }} />
-          </Tooltip>
-        ) : (
-          <Tooltip title={v.tooltip}>
-            <Chip size="small" color="error" variant="outlined" icon={<CancelIcon fontSize="small" />} label="Model" sx={{ mt: 0.25 }} />
-          </Tooltip>
-        );
-      })()}
-    </Stack>
-  ) : isLive ? (
-    <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexShrink: 0 }}>
-      {LiveDot}
-      <Chip size="small" color="warning" label="Live" sx={{ height: 22 }} />
-      <Chip
-        size="small"
-        variant="outlined"
-        label={`${game.home.code} ${game.homeScore ?? "–"} — ${game.away.code} ${game.awayScore ?? "–"}`}
-        sx={{ height: 22, display: { xs: 'none', sm: 'inline-flex' } }}
-      />
-      <Chip size="small" variant="outlined" label={liveStatusLabel} sx={{ height: 22 }} />
-    </Stack>
-  ) : (
-    <Chip
-      size="small"
-      variant="outlined"
-      sx={{ flexShrink: 0, height: 22 }}
-      label={
-        game?.hasClock
-          ? formatGameLabel(game._iso, { mode: "ET", withTZ: true })
-          : new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" })
-              .format(new Date(`${game.dateKey}T12:00:00Z`))
-      }
-    />
-  );
+  let statusLabel = game?.status || "Scheduled";
+  if (!final && !live && game?.hasClock && game?._iso) {
+    statusLabel = formatGameLabel(game._iso, { mode: "ET", withTZ: true });
+  }
 
   return (
-    <Card variant="outlined" sx={{ borderRadius: 1 }}>
-      <ListItemButton
-        onClick={onPick}
-        sx={{
-          borderRadius: 1,
-          px: 1,
-          py: 1,
-          minHeight: 64,                 // comfy tap target
-          "&:hover": { bgcolor: "action.hover" },
-        }}
-      >
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ width: "100%" }}>
-          {/* Compact home badge */}
-          <Avatar
-            sx={{
-              width: 34, height: 34, fontSize: 12,
-              bgcolor: "primary.main",
-              color: "primary.contrastText",
-              flexShrink: 0,
-            }}
-            aria-label={`Home team ${game.home.code}`}
-          >
-            {game.home.code}
-          </Avatar>
-
-          {/* Main text block */}
-          <Box sx={{ flex: "1 1 auto", minWidth: 0 }}>
-            {/* Top line: codes or bolded winner on final */}
-            <Typography
-              variant="body2"
-              sx={{
-                fontWeight: 700,
-                display: "block",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-              aria-label={`${game.away.code} at ${game.home.code}`}
-            >
-              {final ? (
-                <>
-                  <Box component="span" sx={{ fontWeight: final.homeWon ? 800 : 600 }}>{game.home.code}</Box>
-                  <Box component="span" sx={{ mx: 0.5, opacity: 0.7 }}>vs</Box>
-                  <Box component="span" sx={{ fontWeight: !final.homeWon ? 800 : 600 }}>{game.away.code}</Box>
-                </>
-              ) : (
-                titleCodes
-              )}
-            </Typography>
-
-            {/* Second line: long names (2-line clamp) */}
-            <Typography
-              variant="caption"
-              sx={{
-                opacity: 0.8,
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical",
-                overflow: "hidden",
-                whiteSpace: "normal",
-              }}
-              aria-label={subLine}
-            >
-              {subLine}
-            </Typography>
-
-            {/* Third line (only on mobile, when live) — compact score */}
-            {isLive && (
-              <Typography
-                variant="caption"
-                sx={{ mt: 0.25, display: { xs: 'block', sm: 'none' }, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
-              >
-                {`${game.home.code} ${game.homeScore ?? "–"} — ${game.away.code} ${game.awayScore ?? "–"} · ${liveStatusLabel}`}
-              </Typography>
-            )}
-          </Box>
-
-          {/* Right-side status cluster */}
-          {RightStatus}
+    <Card
+      variant="outlined"
+      onClick={onPick}
+      sx={{
+        borderRadius: 3,
+        cursor: "pointer",
+        overflow: "hidden",
+        transition: "transform 140ms ease, border-color 140ms ease, background-color 140ms ease",
+        "&:hover": { transform: { sm: "translateY(-2px)" }, borderColor: "rgba(255,255,255,.24)", bgcolor: "rgba(255,255,255,.025)" },
+      }}
+    >
+      <CardContent sx={{ p: { xs: 1.5, sm: 2 }, "&:last-child": { pb: { xs: 1.5, sm: 2 } } }}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ mb: 1.25 }}>
+          <Stack direction="row" spacing={0.75} alignItems="center">
+            <Chip size="small" label={stageLabel(game?.seasonStageId)} variant="outlined" />
+            {live && <Chip size="small" label="LIVE" color="warning" />}
+            {final && <Chip size="small" label="FINAL" color="success" />}
+          </Stack>
+          <Typography variant="caption" sx={{ color: "text.secondary", textAlign: "right" }}>
+            {statusLabel}
+          </Typography>
         </Stack>
-      </ListItemButton>
+
+        <Stack spacing={1.2}>
+          <TeamLine team={game.away} score={(final || live) ? as : null} winner={awayWon} homeAway="Away" />
+          <Divider />
+          <TeamLine team={game.home} score={(final || live) ? hs : null} winner={homeWon} homeAway="Home" />
+        </Stack>
+
+        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mt: 1.35 }}>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            Tap for recent form, series & player stats
+          </Typography>
+          <ArrowForwardRoundedIcon sx={{ fontSize: 18, color: "text.secondary" }} />
+        </Stack>
+      </CardContent>
     </Card>
   );
 }
 
-
-/* ========= Main Mobile Calendar ========= */
-export default function AllGamesCalendar(){
-  const [allGames,setAllGames]=useState([]);
-  const [viewMonth,setViewMonth]=useState(firstOfMonth(new Date()));
-  const [selectedDate,setSelectedDate]=useState(new Date());
-  const [loadErr,setLoadErr]=useState(null);
-  const [loading,setLoading]=useState(true);
-
-  const [compareGame,setCompareGame]=useState(null);
-  const [compareOpen,setCompareOpen]=useState(false);
-
-  const [monthCache, setMonthCache] = useState(new Map());
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        const y = viewMonth.getFullYear();
-        const mIdx = viewMonth.getMonth();
-        const m = String(mIdx + 1).padStart(2, '0');
-        const monthKey = `${y}-${m}`;
-
-        if (monthCache.has(monthKey)) {
-          if (!cancelled) {
-            setAllGames(monthCache.get(monthKey));
-            setLoadErr(null);
-            setLoading(false);
-          }
-          return;
-        }
-
-        const rows = await fetchMonthSchedulePublic(y, mIdx);
-        if (cancelled) return;
-
-        const next = new Map(monthCache);
-        next.set(monthKey, rows);
-        setMonthCache(next);
-        setAllGames(rows);
-        setLoadErr(null);
-      } catch (e) {
-        if (!cancelled){ setLoadErr(e?.message || String(e)); setAllGames([]); }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return ()=>{ cancelled=true; };
-  }, [viewMonth, monthCache]);
-
-  function bucketByDayAll(games){
-    const m = new Map();
-    for (const g of games || []) {
-      const k = g?.dateKey; if (!k) continue;
-      if (!m.has(k)) m.set(k, []);
-      m.get(k).push(g);
-    }
-    for (const arr of m.values()) {
-      arr.sort((a,b)=> String(a._iso||"").localeCompare(String(b._iso||"")) || String(a.home?.name||"").localeCompare(String(b.home?.name||"")));
-    }
-    return m;
-  }
-
-  const monthDays = useMemo(()=> daysInMonth(viewMonth.getFullYear(), viewMonth.getMonth()), [viewMonth]);
-  const eventsMap = useMemo(()=>{
-    const y = viewMonth.getFullYear(); const m = String(viewMonth.getMonth()+1).padStart(2,'0');
-    const monthKey = `${y}-${m}`;
-    const monthGames = allGames.filter(g => (g.dateKey||'').startsWith(monthKey));
-    return bucketByDayAll(monthGames);
-  }, [allGames, viewMonth]);
-
-  const monthHasGames = useMemo(() => mapHasAnyGames(eventsMap), [eventsMap]);
-  const inOffseasonView = isOffseasonMonth(viewMonth);
-
-  const selectedKey = dateKeyFromDate(selectedDate);
-  const selectedGames = eventsMap.get(selectedKey) || [];
-
-  const stripRef = useRef(null);
-  useEffect(()=>{
-    const idx = monthDays.findIndex(d => dateKeyFromDate(d)===selectedKey);
-    if (idx>=0 && stripRef.current) {
-      const el = stripRef.current.querySelector(`[data-idx="${idx}"]`);
-      if (el) el.scrollIntoView({ inline:'center', behavior:'smooth', block:'nearest' });
-    }
-  }, [selectedKey, monthDays]);
-
-  const headerMonth = viewMonth.toLocaleDateString(undefined,{ month:'long', year:'numeric' });
-  function openCompare(game){ setCompareGame(game); setCompareOpen(true); }
-
-  return (
-    <Box sx={{ mx:'auto', width:'100%', maxWidth: 720, px:{ xs:1, sm:1.5 }, py:1.5 }}>
-      {/* 👇 Intro/Explainer card goes here */}
-      <Card variant="outlined" sx={{ borderRadius: 1, mb: 2 }}>
-        <CardContent sx={{ p: 2 }}>
-          <Typography component="h1" variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-            NBA Calendar & Matchup Helper
-          </Typography>
-          <Typography variant="body2" sx={{ opacity: 0.9 }}>
-            Browse the NBA schedule month by month, tap on any game to see both teams’ recent
-            form, head-to-head history, player stat snapshots, and quick matchup notes.
-            It’s built to be clean, mobile-friendly, and fun to explore.
-          </Typography>
-        </CardContent>
-      </Card>
-
-      {/* header */}
-      <Box
-        sx={{
-          position: 'sticky',
-          top: { xs: 56, sm: 64 },                 // offset for fixed AppBar (Toolbar height)
-          zIndex: (t) => t.zIndex.appBar - 1,      // stay under the site header
-          bgcolor: 'background.default',
-          pt: 1,
-          pb: 1,
-          borderBottom: 1,
-          borderColor: 'divider',
-          backdropFilter: 'saturate(180%) blur(8px)', // subtle glassy feel (optional)
-        }}
-      >
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.5 }}>
-          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 0 }}>
-            <Box sx={{ lineHeight: 1 }}>
-              <Typography
-                variant="h6"
-                sx={{ fontFamily: '"Bebas Neue", sans-serif', fontSize: { xs: 26, sm: 32 }, letterSpacing: 1, fontWeight: 400 }}
-              />
-              <Typography
-                variant="caption"
-                sx={{ opacity: 0.75, display: 'block', mt: -0.25, maxWidth: 280, whiteSpace: 'normal', wordBreak: 'break-word' }}
-              >
-                NBA <SportsBasketballIcon fontSize="small" sx={{ verticalAlign: 'middle' }} />
-              </Typography>
-            </Box>
-            <Divider orientation="vertical" flexItem sx={{ opacity: 0.2 }} />
-            <Stack direction="row" spacing={1} alignItems="center">
-              <CalendarMonthIcon fontSize="small" />
-              <Typography variant="subtitle1" sx={{ fontWeight: 700 }} noWrap>
-                {headerMonth}
-              </Typography>
-            </Stack>
-          </Stack>
-
-          <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignSelf: 'center' }}>
-            <IconButton
-              size="small"
-              onClick={() => {
-                const n = addMonths(viewMonth, -1);
-                setViewMonth(n);
-                setSelectedDate(n);
-              }}
-            >
-              <ChevronLeftIcon fontSize="small" />
-            </IconButton>
-            <IconButton
-              size="small"
-              onClick={() => {
-                const n = addMonths(viewMonth, 1);
-                setViewMonth(n);
-                setSelectedDate(n);
-              }}
-            >
-              <ChevronRightIcon fontSize="small" />
-            </IconButton>
-          </Stack>
-        </Stack>
-      </Box>
-
-      {/* Offseason / empty-month fallback (always real content for AdSense) */}
-      {!loading && !monthHasGames && (
-        <Card variant="outlined" sx={{ borderRadius: 1, mb: 2 }}>
-          <CardContent sx={{ p: 2 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
-              {inOffseasonView ? "We’re between seasons" : "No games in this month"}
-            </Typography>
-            <Typography variant="body2" sx={{ opacity: 0.9, mb: 1 }}>
-              {inOffseasonView
-                ? "The NBA regular season begins in October. Until tip-off, you can still read the latest news and browse previous matchup context."
-                : "There aren’t any scheduled games in this month’s view. Try the arrows to switch months, or explore the latest NBA news below."}
-            </Typography>
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-              <Button
-                component={RouterLink}
-                to="/about"
-                variant="outlined"
-                size="small"
-              >
-                About PIVT
-              </Button>
-              <Button
-                href="https://www.nba.com/news"
-                target="_blank"
-                rel="noopener"
-                variant="outlined"
-                size="small"
-              >
-                Latest NBA headlines
-              </Button>
-            </Stack>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* day strip */}
-      <Box ref={stripRef} sx={{ mt: 1.5, display:'flex', gap:1, overflowX:'auto', pb:1, "&::-webkit-scrollbar": { display:'none' } }}>
-        {monthDays.map((d, idx)=>{
-          const key = dateKeyFromDate(d);
-          const count = (eventsMap.get(key) || []).length;
-          const selected = key===selectedKey;
-          return (
-            <Box key={key} data-idx={idx} sx={{ flex:'0 0 auto' }}>
-              <DayPill d={d} selected={selected} count={count} onClick={()=> setSelectedDate(d)} />
-            </Box>
-          );
-        })}
-      </Box>
-
-      {/* agenda */}
-      <Card variant="outlined" sx={{ borderRadius:1 }}>
-        <CardContent sx={{ p:1.5 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight:700, mb:1 }}>
-            {selectedDate.toLocaleDateString(undefined,{ weekday:'long', month:'short', day:'numeric' })}
-          </Typography>
-
-          {loading ? (
-            <Stack alignItems="center" sx={{ py:3 }}><CircularProgress size={22} /></Stack>
-          ) : selectedGames.length ? (
-            <Stack spacing={1}>
-              {selectedGames.map((g, i)=>(
-                <GameCard key={i} game={g} onPick={()=> openCompare(g)} />
-              ))}
-            </Stack>
-          ) : (
-            <Typography variant="body2" sx={{ opacity:0.7 }}>No games today.</Typography>
-          )}
-
-          {loadErr && (
-            <Typography variant="caption" sx={{ color:'warning.main', mt:1, display:'block' }}>
-              Load error: {loadErr}
-            </Typography>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* drawer */}
-      <ComparisonDrawer open={compareOpen} onClose={()=> setCompareOpen(false)} game={compareGame} />
-
-      {/* 👇 Daily original content */}
-      <Box sx={{ mt: 2 }}>
-        <HaikuOfTheDay compact look="typewriter" />
-      </Box>
-      
-      {/* news */}
-      <NbaNews />
-    </Box>
-  );
-}
-
-/* ========= Day pill ========= */
 function DayPill({ d, selected, count, onClick }) {
-  const dow = d.toLocaleDateString(undefined,{ weekday:'short' });
+  const dow = d.toLocaleDateString(undefined, { weekday: "short" });
   const day = d.getDate();
-  const isToday = dateKeyFromDate(new Date()) === dateKeyFromDate(d);
+  const today = dateKeyFromDate(new Date()) === dateKeyFromDate(d);
 
   return (
     <Button
       onClick={onClick}
       variant={selected ? "contained" : "outlined"}
-      size="large"
       aria-label={`${dow} ${day}, ${count || 0} games`}
       sx={{
-        borderRadius: 1, minWidth: 96, height: 88, px: 1.25, py: 0.75,
-        display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-        bgcolor: selected ? 'primary.main' : 'background.paper',
-        color: selected ? 'primary.contrastText' : 'text.primary',
-        borderColor: selected ? 'primary.main' : 'divider',
-        boxShadow: selected ? 2 : 0, transition:'transform 80ms ease, box-shadow 120ms ease',
-        '&:hover': { transform: 'translateY(-1px)' }, '&:active': { transform: 'translateY(0px)' }
+        flex: "0 0 auto",
+        minWidth: { xs: 70, sm: 78 },
+        height: { xs: 72, sm: 78 },
+        px: 1,
+        borderRadius: 2.5,
+        flexDirection: "column",
+        gap: 0.2,
+        textTransform: "none",
       }}
     >
-      <Typography variant="caption" sx={{ opacity: 0.85, lineHeight: 1 }}>
-        {dow}{isToday && !selected ? ' •' : ''}
+      <Typography variant="caption" sx={{ opacity: 0.76, fontWeight: 800, lineHeight: 1 }}>{dow}</Typography>
+      <Typography sx={{ fontFamily: '"Bebas Neue", sans-serif', fontSize: 27, lineHeight: 1 }}>{String(day).padStart(2, "0")}</Typography>
+      <Typography variant="caption" sx={{ fontSize: 10, opacity: 0.72, lineHeight: 1.1 }}>
+        {today ? "Today" : count ? `${count} game${count > 1 ? "s" : ""}` : "—"}
       </Typography>
-      <Typography variant="h6" sx={{ fontWeight: 800, lineHeight: 1, mt: 0.25 }}>
-        {String(day).padStart(2,'0')}
-      </Typography>
-      <Chip size="small" label={count ? `${count} game${count>1?'s':''}` : '0'}
-        color={count ? 'secondary' : 'default'}
-        variant={selected ? 'filled' : 'outlined'}
-        sx={{ mt: 0.9, height: 20, borderRadius: 0.75, '& .MuiChip-label': { px: 0.8, fontSize: 11, fontWeight: 700 } }}
-      />
     </Button>
+  );
+}
+
+function LeagueStatus({ currentOffseason, onJumpOctober }) {
+  return (
+    <Card variant="outlined" sx={{ borderRadius: 3, overflow: "hidden" }}>
+      <CardContent sx={{ p: 2.25 }}>
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+          <Box>
+            <Typography variant="overline" sx={{ color: "text.secondary", letterSpacing: 1.2 }}>LEAGUE STATUS</Typography>
+            <Typography variant="h5" sx={{ mt: -0.35 }}>
+              {currentOffseason ? "NBA OFFSEASON" : "SEASON ACTIVE"}
+            </Typography>
+          </Box>
+          <Box className={currentOffseason ? "status-orb offseason" : "status-orb active"} />
+        </Stack>
+        <Typography variant="body2" sx={{ color: "text.secondary", mt: 1 }}>
+          {currentOffseason
+            ? "It’s currently the NBA offseason. The 2026–27 regular season begins October 20, so August has no regular-season slate."
+            : "The NBA calendar is active. Use the date rail to move through the current month and open any matchup for recent team context."}
+        </Typography>
+        {currentOffseason && (
+          <Button onClick={onJumpOctober} size="small" variant="outlined" sx={{ mt: 1.5 }}>
+            Jump to October
+          </Button>
+        )}
+        <Divider sx={{ my: 1.5 }} />
+        <Stack direction="row" spacing={0.75} alignItems="center">
+          <WifiRoundedIcon sx={{ fontSize: 16, color: "success.main" }} />
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            Public NBA data · no account or API key required
+          </Typography>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function AllGamesCalendar() {
+  const now = new Date();
+  const [allGames, setAllGames] = useState([]);
+  const [viewMonth, setViewMonth] = useState(firstOfMonth(now));
+  const [selectedDate, setSelectedDate] = useState(now);
+  const [loadErr, setLoadErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [compareGame, setCompareGame] = useState(null);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const cacheRef = useRef(new Map());
+  const stripRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const y = viewMonth.getFullYear();
+      const mIdx = viewMonth.getMonth();
+      const key = `${y}-${String(mIdx + 1).padStart(2, "0")}`;
+      try {
+        setLoading(true);
+        if (cacheRef.current.has(key)) {
+          if (!cancelled) {
+            setAllGames(cacheRef.current.get(key));
+            setLoadErr(null);
+          }
+          return;
+        }
+        const rows = await fetchMonthSchedulePublic(y, mIdx);
+        if (cancelled) return;
+        cacheRef.current.set(key, rows);
+        setAllGames(rows);
+        setLoadErr(null);
+      } catch (e) {
+        if (!cancelled) {
+          setLoadErr(e?.message || String(e));
+          setAllGames([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [viewMonth]);
+
+  const monthDays = useMemo(() => daysInMonth(viewMonth.getFullYear(), viewMonth.getMonth()), [viewMonth]);
+  const eventsMap = useMemo(() => {
+    const map = new Map();
+    for (const game of allGames || []) {
+      if (!game?.dateKey) continue;
+      if (!map.has(game.dateKey)) map.set(game.dateKey, []);
+      map.get(game.dateKey).push(game);
+    }
+    for (const games of map.values()) games.sort((a, b) => String(a._iso || "").localeCompare(String(b._iso || "")));
+    return map;
+  }, [allGames]);
+
+  const selectedKey = dateKeyFromDate(selectedDate);
+  const selectedGames = eventsMap.get(selectedKey) || [];
+  const monthHasGames = useMemo(() => mapHasAnyGames(eventsMap), [eventsMap]);
+  const viewedOffseason = isOffseasonMonth(viewMonth);
+  const currentOffseason = isOffseasonMonth(now);
+
+  useEffect(() => {
+    const idx = monthDays.findIndex((d) => dateKeyFromDate(d) === selectedKey);
+    if (idx < 0 || !stripRef.current) return;
+    const el = stripRef.current.querySelector(`[data-idx="${idx}"]`);
+    if (el) el.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [monthDays, selectedKey]);
+
+  function moveMonth(amount) {
+    const next = addMonths(viewMonth, amount);
+    setViewMonth(next);
+    setSelectedDate(next);
+  }
+  function jumpToday() {
+    const d = new Date();
+    setViewMonth(firstOfMonth(d));
+    setSelectedDate(d);
+  }
+  function jumpOctober() {
+    const d = nextOctober(now);
+    setViewMonth(firstOfMonth(d));
+    setSelectedDate(d);
+  }
+  function openCompare(game) {
+    setCompareGame(game);
+    setCompareOpen(true);
+  }
+
+  const headerMonth = viewMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const selectedLabel = selectedDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+
+  return (
+    <Box sx={{ maxWidth: 1380, width: "100%", mx: "auto", px: { xs: 1.25, sm: 2.5, lg: 3 }, py: { xs: 1.5, sm: 2.5 } }}>
+      <Card className="pivt-hero" variant="outlined" sx={{ borderRadius: 4, mb: { xs: 1.5, sm: 2.25 } }}>
+        <CardContent sx={{ p: { xs: 2, sm: 3 }, "&:last-child": { pb: { xs: 2, sm: 3 } } }}>
+          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "minmax(0,1fr) auto" }, gap: 2, alignItems: "end" }}>
+            <Box>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Chip
+                  size="small"
+                  color={currentOffseason ? "warning" : "success"}
+                  label={currentOffseason ? "OFFSEASON NOW" : "NBA NOW"}
+                />
+                <Chip size="small" variant="outlined" label="Keyless public data" />
+              </Stack>
+              <Typography component="h1" sx={{ fontFamily: '"Bebas Neue", sans-serif', fontSize: { xs: 43, sm: 58, lg: 68 }, lineHeight: 0.94, letterSpacing: 1.2 }}>
+                THE NBA, DAY BY DAY.
+              </Typography>
+              <Typography sx={{ color: "text.secondary", maxWidth: 720, mt: 1, fontSize: { xs: 14, sm: 16 } }}>
+                Scores, schedules, recent form, season series and player snapshots in one fast calendar. Team logos and available story images are pulled from public source data.
+              </Typography>
+            </Box>
+
+            <Stack direction="row" spacing={1} alignItems="center" justifyContent={{ xs: "space-between", md: "flex-end" }}>
+              <Button size="small" variant="text" onClick={jumpToday}>Today</Button>
+              <IconButton onClick={() => moveMonth(-1)} aria-label="Previous month"><ChevronLeftRoundedIcon /></IconButton>
+              <Chip icon={<CalendarMonthRoundedIcon />} label={headerMonth} variant="outlined" sx={{ minWidth: { xs: 145, sm: 174 } }} />
+              <IconButton onClick={() => moveMonth(1)} aria-label="Next month"><ChevronRightRoundedIcon /></IconButton>
+            </Stack>
+          </Box>
+        </CardContent>
+      </Card>
+
+      <Box
+        ref={stripRef}
+        sx={{
+          display: "flex", gap: 0.8, overflowX: "auto", pb: 1.2, mb: 1.1,
+          scrollSnapType: "x proximity", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" },
+        }}
+      >
+        {monthDays.map((d, idx) => {
+          const key = dateKeyFromDate(d);
+          const count = (eventsMap.get(key) || []).length;
+          return (
+            <Box key={key} data-idx={idx} sx={{ scrollSnapAlign: "center" }}>
+              <DayPill d={d} selected={key === selectedKey} count={count} onClick={() => setSelectedDate(d)} />
+            </Box>
+          );
+        })}
+      </Box>
+
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.72fr) minmax(320px, .78fr)" }, gap: { xs: 1.5, sm: 2 } }}>
+        <Stack spacing={1.5}>
+          <Card variant="outlined" sx={{ borderRadius: 3 }}>
+            <CardContent sx={{ p: { xs: 1.5, sm: 2.25 } }}>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between" alignItems={{ xs: "flex-start", sm: "center" }} sx={{ mb: 1.4 }}>
+                <Box>
+                  <Typography variant="overline" sx={{ color: "text.secondary", letterSpacing: 1.2 }}>SELECTED DAY</Typography>
+                  <Typography variant="h5" sx={{ mt: -0.4 }}>{selectedLabel}</Typography>
+                </Box>
+                <Chip
+                  icon={<SportsBasketballRoundedIcon />}
+                  label={loading ? "Loading" : `${selectedGames.length} game${selectedGames.length === 1 ? "" : "s"}`}
+                  variant="outlined"
+                />
+              </Stack>
+              <Divider sx={{ mb: 1.5 }} />
+
+              {loading ? (
+                <Stack alignItems="center" justifyContent="center" sx={{ minHeight: 220 }} spacing={1}>
+                  <CircularProgress size={24} />
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>Loading public NBA schedule…</Typography>
+                </Stack>
+              ) : selectedGames.length ? (
+                <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: selectedGames.length > 1 ? "repeat(2, minmax(0, 1fr))" : "1fr" }, gap: 1.2 }}>
+                  {selectedGames.map((game) => <GameCard key={game.id || `${game.dateKey}-${game.away?.code}-${game.home?.code}`} game={game} onPick={() => openCompare(game)} />)}
+                </Box>
+              ) : (
+                <Box sx={{ py: { xs: 4, sm: 6 }, textAlign: "center" }}>
+                  <SportsBasketballRoundedIcon sx={{ fontSize: 42, color: "text.disabled", mb: 1 }} />
+                  <Typography variant="subtitle1" sx={{ fontWeight: 900 }}>No games on this date</Typography>
+                  <Typography variant="body2" sx={{ color: "text.secondary", maxWidth: 500, mx: "auto", mt: 0.5 }}>
+                    {viewedOffseason
+                      ? "This date falls in the NBA offseason. Move to October to browse the new season schedule."
+                      : "Try another day in the rail above or move to a different month."}
+                  </Typography>
+                  {viewedOffseason && <Button onClick={jumpOctober} variant="outlined" size="small" sx={{ mt: 1.5 }}>October schedule</Button>}
+                </Box>
+              )}
+
+              {loadErr && (
+                <Typography variant="caption" sx={{ color: "warning.main", mt: 1.25, display: "block" }}>
+                  Schedule source error: {loadErr}
+                </Typography>
+              )}
+            </CardContent>
+          </Card>
+
+          {!loading && !monthHasGames && (
+            <Card variant="outlined" sx={{ borderRadius: 3 }}>
+              <CardContent sx={{ p: 2 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 900 }}>
+                  {viewedOffseason ? `${headerMonth} is in the offseason` : `No NBA games listed for ${headerMonth}`}
+                </Typography>
+                <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
+                  {viewedOffseason
+                    ? "That empty calendar is expected—not a data failure. PIVT keeps news and historical matchup context available while the regular season is idle."
+                    : "The public schedule returned no games for this month. Use the month controls above to continue browsing."}
+                </Typography>
+              </CardContent>
+            </Card>
+          )}
+        </Stack>
+
+        <Stack spacing={1.5} sx={{ minWidth: 0 }}>
+          <LeagueStatus currentOffseason={currentOffseason} onJumpOctober={jumpOctober} />
+          <NbaNews compact />
+          <HaikuOfTheDay compact look="typewriter" />
+        </Stack>
+      </Box>
+
+      <ComparisonDrawer open={compareOpen} onClose={() => setCompareOpen(false)} game={compareGame} />
+
+      <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={0.5} sx={{ py: 3, color: "text.secondary" }}>
+        <Typography variant="caption">PIVT · NBA schedule, scores and recent form</Typography>
+        <Typography variant="caption">Public-source data · no login required</Typography>
+      </Stack>
+    </Box>
   );
 }

@@ -5,9 +5,12 @@ const path = require("path");                                  // <-- ADD
 
 const app = express();
 
-// --- DROP-IN (server/index.js): enable CORS for production ---
-const cors = require("cors");
-app.use(cors({ origin: true })); // or replace 'true' with your exact frontend origin string
+// Same-origin in production; permissive headers keep local split-port development simple.
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  next();
+});
 
 const PORT = process.env.PORT || 5001;
 
@@ -203,6 +206,7 @@ async function fetchFeed(feed, parser, ua) {
         link: it?.link || it?.guid || "",
         pubDate: it?.pubDate || it?.published || it?.updated || "",
         source: feed.source,
+        image: typeof pickImageFromItem === "function" ? pickImageFromItem(it) : "",
       }))
       .filter(x => x.title && x.link);
   } catch (e) {
@@ -319,6 +323,19 @@ async function fetchWithTimeout(url, ms, headers) {
 }
 
 // --- fetch a single RSS feed ---
+function pickImageFromItem(it) {
+  const media = Array.isArray(it?.["media:content"]) ? it["media:content"][0] : it?.["media:content"];
+  const thumb = Array.isArray(it?.["media:thumbnail"]) ? it["media:thumbnail"][0] : it?.["media:thumbnail"];
+  const enclosure = Array.isArray(it?.enclosure) ? it.enclosure[0] : it?.enclosure;
+  const candidates = [media?.url, media?.href, thumb?.url, thumb?.href, enclosure?.url, enclosure?.href, it?.image?.url, it?.image?.href, typeof it?.image === "string" ? it.image : ""];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) return candidate;
+  }
+  const html = String(it?.description || it?.["content:encoded"] || "");
+  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return match?.[1] && /^https?:\/\//i.test(match[1]) ? match[1] : "";
+}
+
 async function fetchFeed(feed, parser, ua) {
   try {
     const r = await fetchWithTimeout(feed.url, 4000, { "User-Agent": ua });
@@ -343,6 +360,7 @@ async function fetchFeed(feed, parser, ua) {
         link: it?.link || it?.guid || "",
         pubDate: it?.pubDate || it?.published || it?.updated || "",
         source: feed.source,
+        image: typeof pickImageFromItem === "function" ? pickImageFromItem(it) : "",
       }))
       .filter(x => x.title && x.link);
   } catch (e) {

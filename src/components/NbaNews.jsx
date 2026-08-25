@@ -1,25 +1,46 @@
 import React, { useEffect, useState } from "react";
 import {
-  Card, CardContent, Typography, List, ListItem, ListItemText,
-  Chip, Stack, Link, Divider, Box   // ⬅️ added Box
+  Box, Card, CardContent, Chip, CircularProgress, Divider, Link, Stack, Typography
 } from "@mui/material";
-
-// --- DROP-IN IMPORT (top of src/components/NbaNews.jsx) ---
+import ArrowOutwardRoundedIcon from "@mui/icons-material/ArrowOutwardRounded";
+import ImageNotSupportedOutlinedIcon from "@mui/icons-material/ImageNotSupportedOutlined";
 import { API_BASE } from "../api/base";
 
 function timeAgo(ts) {
   const t = ts ? new Date(ts).getTime() : 0;
   if (!t) return "";
   const diff = Math.max(0, Date.now() - t);
-  const mins = Math.round(diff / 60000);
+  const mins = Math.max(1, Math.round(diff / 60000));
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  return `${days}d ago`;
+  return `${Math.round(hrs / 24)}d ago`;
 }
 
-export default function NbaNews() {
+function StoryImage({ item }) {
+  if (!item?.image) {
+    return (
+      <Box className="news-image-fallback">
+        <ImageNotSupportedOutlinedIcon sx={{ fontSize: 20, opacity: 0.55 }} />
+      </Box>
+    );
+  }
+  return (
+    <Box
+      component="img"
+      src={item.image}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={(e) => {
+        e.currentTarget.style.visibility = "hidden";
+      }}
+      sx={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+    />
+  );
+}
+
+export default function NbaNews({ compact = false }) {
   const [items, setItems] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -30,15 +51,12 @@ export default function NbaNews() {
         const r = await fetch(`${API_BASE}/api/news`, { cache: "no-store" });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const json = await r.json();
-
-        const itemsArr = Array.isArray(json?.items) ? json.items : [];
-        // Injuries first, then recency
-        itemsArr.sort((a, b) => {
+        const arr = Array.isArray(json?.items) ? [...json.items] : [];
+        arr.sort((a, b) => {
           if (a.isInjury !== b.isInjury) return a.isInjury ? -1 : 1;
           return new Date(b.pubDate || 0) - new Date(a.pubDate || 0);
         });
-
-        if (!cancel) setItems(itemsArr);
+        if (!cancel) setItems(arr);
       } catch (e) {
         if (!cancel) setErr(e?.message || String(e));
       }
@@ -46,93 +64,68 @@ export default function NbaNews() {
     return () => { cancel = true; };
   }, []);
 
+  const shown = (items || []).slice(0, compact ? 7 : 12);
+
   return (
-    <Card variant="outlined" sx={{ borderRadius: 1, mt: 2 }}>
-      <CardContent sx={{ p: 2 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            NBA News (ESPN · Yahoo · CBS)
-          </Typography>
+    <Card variant="outlined" sx={{ borderRadius: 3, overflow: "hidden" }}>
+      <CardContent sx={{ p: { xs: 1.6, sm: 2 }, "&:last-child": { pb: { xs: 1.6, sm: 2 } } }}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.25 }}>
+          <Box>
+            <Typography variant="overline" sx={{ color: "text.secondary", letterSpacing: 1.2 }}>AROUND THE LEAGUE</Typography>
+            <Typography variant="h6" sx={{ mt: -0.4 }}>NBA NEWS</Typography>
+          </Box>
+          <Chip size="small" variant="outlined" label="ESPN · Yahoo · CBS" />
         </Stack>
-        <Divider sx={{ mb: 1 }} />
+        <Divider sx={{ mb: 1.25 }} />
 
-        {err && (
-          <Typography variant="body2" color="warning.main">
-            Failed to load news: {err}
-          </Typography>
-        )}
+        {err && <Typography variant="body2" color="warning.main">News feed unavailable: {err}</Typography>}
         {!items && !err && (
-          <Typography variant="body2" sx={{ opacity: 0.7 }}>Loading…</Typography>
+          <Stack alignItems="center" sx={{ py: 3 }}><CircularProgress size={20} /></Stack>
+        )}
+        {items && !shown.length && (
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>No stories available right now.</Typography>
         )}
 
-        {items && (
-          <List dense disablePadding>
-            {items.map((it, i) => (
-              <ListItem key={i} disableGutters sx={{ py: 0.65 }}>
-                <ListItemText
-                  // We render our own styled headline block, so no need to force primary/secondary variants here.
-                  primary={
-                    <Box
-                      sx={{
-                        display: 'inline-block',
-                        px: 1,
-                        py: 0.5,
-                        borderRadius: 1,
-                        // translucent surface from theme paper for contrast
-                        bgcolor: (t) => t.palette.mode === 'dark'
-                          ? `${t.palette.background.paper}CC` // ~80% alpha
-                          : t.palette.background.paper,
-                        backdropFilter: 'blur(4px)',
-                      }}
-                    >
-                      <Link
-                        href={it.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        underline="hover"
-                        sx={{
-                          fontWeight: 800,
-                          lineHeight: 1.15,
-                          color: 'rgba(255,255,255,0.98)',
-                          textDecorationColor: 'rgba(255,255,255,0.45)',
-                          textShadow: '0 1px 2px rgba(0,0,0,0.45)',
-                          '&:hover': {
-                            color: '#fff',
-                            textDecorationColor: 'rgba(255,255,255,0.75)',
-                          },
-                        }}
-                      >
-                        {it.title}
-                      </Link>
-                    </Box>
-                  }
-                  secondary={
-                    <Stack
-                      direction="row"
-                      spacing={1}
-                      alignItems="center"
-                      sx={{ mt: 0.5, flexWrap: 'wrap' }}
-                    >
-                      <Chip size="small" variant="outlined" label={it.source} />
-                      {it.isInjury && (
-                        <Chip
-                          size="small"
-                          label="Injury"
-                          color="error"
-                          variant="filled"
-                          sx={{ ml: 0.5 }}
-                        />
-                      )}
-                      <Typography variant="caption" sx={{ opacity: 0.75 }}>
-                        {timeAgo(it.pubDate)}
-                      </Typography>
-                    </Stack>
-                  }
-                />
-              </ListItem>
-            ))}
-          </List>
-        )}
+        <Stack spacing={0.65}>
+          {shown.map((it, i) => (
+            <Link
+              key={`${it.link}-${i}`}
+              href={it.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              underline="none"
+              color="inherit"
+              sx={{ borderRadius: 2.2, p: 0.7, mx: -0.7, "&:hover": { bgcolor: "action.hover" } }}
+            >
+              <Box sx={{ display: "grid", gridTemplateColumns: compact ? "76px minmax(0,1fr)" : { xs: "84px minmax(0,1fr)", sm: "112px minmax(0,1fr)" }, gap: 1.1, alignItems: "center" }}>
+                <Box sx={{ height: compact ? 58 : { xs: 64, sm: 76 }, borderRadius: 1.8, overflow: "hidden", bgcolor: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)" }}>
+                  <StoryImage item={it} />
+                </Box>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 850,
+                      lineHeight: 1.22,
+                      display: "-webkit-box",
+                      WebkitLineClamp: compact ? 2 : 3,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {it.title}
+                  </Typography>
+                  <Stack direction="row" spacing={0.7} alignItems="center" sx={{ mt: 0.65, minWidth: 0 }}>
+                    <Typography variant="caption" sx={{ color: "text.secondary" }}>{it.source}</Typography>
+                    {it.isInjury && <Chip size="small" label="Injury" color="error" sx={{ height: 18, "& .MuiChip-label": { px: 0.7, fontSize: 10 } }} />}
+                    <Typography variant="caption" sx={{ color: "text.disabled" }}>{timeAgo(it.pubDate)}</Typography>
+                    <ArrowOutwardRoundedIcon sx={{ fontSize: 14, ml: "auto !important", color: "text.disabled" }} />
+                  </Stack>
+                </Box>
+              </Box>
+            </Link>
+          ))}
+        </Stack>
       </CardContent>
     </Card>
   );

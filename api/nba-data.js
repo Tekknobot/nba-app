@@ -112,6 +112,9 @@ function teamFromCompetitor(c) {
   return {
     name: t.displayName || t.shortDisplayName || t.name || t.location || normCode(t.abbreviation),
     code: normCode(t.abbreviation || t.shortDisplayName || t.name),
+    logo: t.logo || t.logos?.[0]?.href || "",
+    color: t.color ? `#${String(t.color).replace(/^#/, "")}` : "",
+    alternateColor: t.alternateColor ? `#${String(t.alternateColor).replace(/^#/, "")}` : "",
   };
 }
 
@@ -269,6 +272,7 @@ function playersFromSummary(summary, teamCode) {
     return {
       player_id: Number.isFinite(id) ? id : athlete?.id,
       player: playerNameParts(athlete),
+      image: athlete?.headshot?.href || (typeof athlete?.headshot === "string" ? athlete.headshot : ""),
       min,
       pts,
       reb,
@@ -357,6 +361,7 @@ async function seasonFallbackPlayers(teamCode, season, topN) {
     return {
       player_id: a?.id,
       player: playerNameParts(a),
+      image: a?.headshot?.href || (typeof a?.headshot === "string" ? a.headshot : ""),
       min: minutesString(min),
       pts, reb, ast,
     };
