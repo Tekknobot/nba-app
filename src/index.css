@@ -15,7 +15,7 @@ a { color: inherit; }
   height: 34px;
   display: grid;
   place-items: center;
-  border-radius: 11px;
+  border-radius: 0;
   color: #fff;
   background: linear-gradient(145deg, #3b82f6, #245bd3);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 8px 24px rgba(37,99,235,.22);
@@ -30,7 +30,7 @@ a { color: inherit; }
   position: absolute;
   width: 390px;
   height: 390px;
-  border-radius: 50%;
+  border-radius: 0;
   right: -165px;
   top: -235px;
   background: radial-gradient(circle, rgba(59,130,246,.20), rgba(59,130,246,0) 67%);
@@ -40,7 +40,7 @@ a { color: inherit; }
 .status-orb {
   width: 13px;
   height: 13px;
-  border-radius: 50%;
+  border-radius: 0;
   margin-top: 5px;
   box-shadow: 0 0 0 5px rgba(255,255,255,.035);
 }
@@ -56,4 +56,9 @@ a { color: inherit; }
 @media (max-width: 600px) {
   body { background-attachment: scroll; }
   .brand-mark { width: 32px; height: 32px; }
+}
+
+/* PIVT visual rule: hard square corners everywhere. */
+*, *::before, *::after {
+  border-radius: 0 !important;
 }

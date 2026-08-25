@@ -111,7 +111,7 @@ function ComparisonDrawer({ open, onClose, game }) {
       onClose={onClose}
       PaperProps={{
         sx: phone
-          ? { height: "92vh", borderRadius: "22px 22px 0 0", p: 1.5 }
+          ? { height: "92vh", borderRadius: 0, p: 1.5 }
           : { width: 700, maxWidth: "46vw", p: 2.5 },
       }}
     >
@@ -180,7 +180,7 @@ function GameCard({ game, onPick }) {
       variant="outlined"
       onClick={onPick}
       sx={{
-        borderRadius: 3,
+        borderRadius: 0,
         cursor: "pointer",
         overflow: "hidden",
         transition: "transform 140ms ease, border-color 140ms ease, background-color 140ms ease",
@@ -231,7 +231,7 @@ function DayPill({ d, selected, count, onClick }) {
         minWidth: { xs: 70, sm: 78 },
         height: { xs: 72, sm: 78 },
         px: 1,
-        borderRadius: 2.5,
+        borderRadius: 0,
         flexDirection: "column",
         gap: 0.2,
         textTransform: "none",
@@ -248,7 +248,7 @@ function DayPill({ d, selected, count, onClick }) {
 
 function LeagueStatus({ currentOffseason, onJumpOctober }) {
   return (
-    <Card variant="outlined" sx={{ borderRadius: 3, overflow: "hidden" }}>
+    <Card variant="outlined" sx={{ borderRadius: 0, overflow: "hidden" }}>
       <CardContent sx={{ p: 2.25 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
           <Box>
@@ -375,7 +375,7 @@ export default function AllGamesCalendar() {
 
   return (
     <Box sx={{ maxWidth: 1380, width: "100%", mx: "auto", px: { xs: 1.25, sm: 2.5, lg: 3 }, py: { xs: 1.5, sm: 2.5 } }}>
-      <Card className="pivt-hero" variant="outlined" sx={{ borderRadius: 4, mb: { xs: 1.5, sm: 2.25 } }}>
+      <Card className="pivt-hero" variant="outlined" sx={{ borderRadius: 0, mb: { xs: 1.5, sm: 2.25 } }}>
         <CardContent sx={{ p: { xs: 2, sm: 3 }, "&:last-child": { pb: { xs: 2, sm: 3 } } }}>
           <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "minmax(0,1fr) auto" }, gap: 2, alignItems: "end" }}>
             <Box>
@@ -425,7 +425,7 @@ export default function AllGamesCalendar() {
 
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.72fr) minmax(320px, .78fr)" }, gap: { xs: 1.5, sm: 2 } }}>
         <Stack spacing={1.5}>
-          <Card variant="outlined" sx={{ borderRadius: 3 }}>
+          <Card variant="outlined" sx={{ borderRadius: 0}}>
             <CardContent sx={{ p: { xs: 1.5, sm: 2.25 } }}>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between" alignItems={{ xs: "flex-start", sm: "center" }} sx={{ mb: 1.4 }}>
                 <Box>
@@ -471,7 +471,7 @@ export default function AllGamesCalendar() {
           </Card>
 
           {!loading && !monthHasGames && (
-            <Card variant="outlined" sx={{ borderRadius: 3 }}>
+            <Card variant="outlined" sx={{ borderRadius: 0}}>
               <CardContent sx={{ p: 2 }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 900 }}>
                   {viewedOffseason ? `${headerMonth} is in the offseason` : `No NBA games listed for ${headerMonth}`}

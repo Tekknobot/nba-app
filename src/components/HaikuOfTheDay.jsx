@@ -103,7 +103,7 @@ export default function HaikuOfTheDay({
         };
 
   return (
-    <Card variant="outlined" sx={{ borderRadius: 1, mb: 2 }}>
+    <Card variant="outlined" sx={{ borderRadius: 0, mb: 2 }}>
       <CardContent sx={{ p: 2 }}>
         <Stack
           direction="row"
@@ -125,7 +125,7 @@ export default function HaikuOfTheDay({
             p: { xs: 1.25, sm: 1.5 },
             borderLeft: '3px solid',
             borderColor: 'primary.main',
-            borderRadius: 1,
+            borderRadius: 0,
             bgcolor: (t) => t.palette.action.hover,
           }}
         >

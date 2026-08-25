@@ -95,7 +95,7 @@ function DayDrawer({ open, onClose, date, items }){
       anchor="bottom"
       open={open}
       onClose={onClose}
-      PaperProps={{ sx:{ borderTopLeftRadius:1, borderTopRightRadius:1 } }}
+      PaperProps={{ sx:{ borderTopLeftRadius:0, borderTopRightRadius:0 } }}
     >
       <Box sx={{ p:2 }}>
         <Typography variant="subtitle1" sx={{ fontWeight:700, mb:1 }}>
@@ -111,7 +111,7 @@ function DayDrawer({ open, onClose, date, items }){
                 primary={
                   <Stack direction={isXs ? "column" : "row"} spacing={isXs ? 0.5 : 1} alignItems={isXs ? "flex-start" : "center"}>
                     <Stack direction="row" spacing={1} alignItems="center">
-                      <Box sx={{ width:6, height:6, borderRadius:1, bgcolor:stageDotColor(ev.seasonStageId) }} />
+                      <Box sx={{ width:6, height:6, borderRadius: 0, bgcolor:stageDotColor(ev.seasonStageId) }} />
                       <span>{`${ev.homeAway==='Away'?'@':'vs'} ${ev.opp}`}</span>
                     </Stack>
                     <Chip size="small" label={ev.et || 'TBD'} variant="outlined" />
@@ -140,7 +140,7 @@ function SquareDay({ d, list, inMonth, today, onClick }) {
         onClick={onClick}
         sx={{
           position: 'absolute', inset: 0,
-          borderRadius: 1, p: { xs: 0.75, sm: 1 },
+          borderRadius: 0, p: { xs: 0.75, sm: 1 },
           border: '1px solid',
           borderColor: today ? 'primary.main' : 'divider',
           bgcolor: inMonth ? (today ? 'action.hover' : 'background.paper') : 'action.selected',
@@ -160,7 +160,7 @@ function SquareDay({ d, list, inMonth, today, onClick }) {
                 size="small"
                 label={`${ev.homeAway === 'Away' ? '@' : 'vs'} ${ev.opp}`}
                 sx={{
-                  borderRadius: 1,
+                  borderRadius: 0,
                   maxWidth: '100%',
                   '& .MuiChip-label': {
                     px: 0.5,
@@ -175,7 +175,7 @@ function SquareDay({ d, list, inMonth, today, onClick }) {
               <Chip
                 size="small"
                 label={`+${list.length - visibleChips}`}
-                sx={{ borderRadius: 1, '& .MuiChip-label': { px: 0.5, fontSize: { xs: 10, sm: 11 } } }}
+                sx={{ borderRadius: 0, '& .MuiChip-label': { px: 0.5, fontSize: { xs: 10, sm: 11 } } }}
               />
             )}
           </Box>
@@ -192,7 +192,7 @@ function MonthGrid({ monthStart, eventsMap }){
   const thisMonth = monthStart.getMonth();
 
   return (
-    <Card variant="outlined" sx={{ borderRadius:1, width:'100%' }}>
+    <Card variant="outlined" sx={{ borderRadius: 0, width:'100%' }}>
       <CardContent sx={{ p:{ xs: 1.25, sm: 2 } }}>
         <Typography variant="subtitle1" sx={{ fontWeight:700, mb:{ xs: 1, sm: 2 } }}>
           {monthStart.toLocaleDateString(undefined,{ month:'long', year:'numeric' })}

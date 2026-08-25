@@ -27,7 +27,7 @@ const theme = createTheme({
     },
   },
 
-  shape: { borderRadius: 12 },
+  shape: { borderRadius: 0},
 
   typography: {
     h1: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 1, fontWeight: 400 },
@@ -47,7 +47,7 @@ const theme = createTheme({
         "*::-webkit-scrollbar": { height: 8, width: 8 },
         "*::-webkit-scrollbar-thumb": {
           backgroundColor: alpha("#fff", 0.2),
-          borderRadius: 8,
+          borderRadius: 0,
         },
         "*::-webkit-scrollbar-thumb:hover": { backgroundColor: alpha("#fff", 0.3) },
       },
@@ -70,7 +70,7 @@ const theme = createTheme({
       defaultProps: { disableElevation: true },
       styleOverrides: {
         root: {
-          borderRadius: 12,
+          borderRadius: 0,
           paddingInline: 16,
           "&:hover": { boxShadow: `0 0 0 2px ${alpha(NBA_BLUE, 0.22)} inset` },
         },
@@ -89,7 +89,7 @@ const theme = createTheme({
 
     MuiChip: {
       styleOverrides: {
-        root: { borderRadius: 999, fontWeight: 800, letterSpacing: 0.3 },
+        root: { borderRadius: 0, fontWeight: 800, letterSpacing: 0.3 },
         outlined: { borderColor: alpha("#fff", 0.26), backgroundColor: alpha("#fff", 0.06) },
       },
     },
@@ -97,7 +97,7 @@ const theme = createTheme({
     MuiListItemButton: {
       styleOverrides: {
         root: {
-          borderRadius: 8,
+          borderRadius: 0,
           transition: "transform 80ms ease, background-color 120ms ease",
           "&:hover": { backgroundColor: alpha(NBA_BLUE, 0.10), transform: "translateY(-1px)" },
           "&.Mui-selected": {

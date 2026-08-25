@@ -46,12 +46,12 @@ export default function GamePage() {
       </Button>
 
       {err ? (
-        <Card variant="outlined" sx={{ borderRadius: 3 }}><CardContent><Typography variant="h6">Game unavailable</Typography><Typography color="warning.main" sx={{ mt: 1 }}>{String(err)}</Typography></CardContent></Card>
+        <Card variant="outlined" sx={{ borderRadius: 0}}><CardContent><Typography variant="h6">Game unavailable</Typography><Typography color="warning.main" sx={{ mt: 1 }}>{String(err)}</Typography></CardContent></Card>
       ) : !game ? (
         <Stack alignItems="center" sx={{ py: 10 }} spacing={1}><CircularProgress size={24} /><Typography variant="body2" sx={{ color: "text.secondary" }}>Loading game…</Typography></Stack>
       ) : (
         <>
-          <Card className="pivt-hero" variant="outlined" sx={{ borderRadius: 4, mb: 2 }}>
+          <Card className="pivt-hero" variant="outlined" sx={{ borderRadius: 0, mb: 2 }}>
             <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
               <Stack direction="row" alignItems="center" justifyContent="center" spacing={{ xs: 1.25, sm: 2.5 }}>
                 <Stack alignItems="center" spacing={0.6} sx={{ flex: 1, minWidth: 0 }}>

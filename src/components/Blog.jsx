@@ -42,7 +42,7 @@ export default function Blog() {
 
   return (
     <Box sx={{ mx: "auto", width: "100%", maxWidth: 1100, px: { xs: 1.25, sm: 2.5 }, py: { xs: 1.5, sm: 3 } }}>
-      <Card className="pivt-hero" variant="outlined" sx={{ borderRadius: 4, mb: 1.5 }}>
+      <Card className="pivt-hero" variant="outlined" sx={{ borderRadius: 0, mb: 1.5 }}>
         <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
             <Chip icon={<ArticleOutlinedIcon />} label="Daily notebook" size="small" variant="outlined" />
@@ -56,7 +56,7 @@ export default function Blog() {
         </CardContent>
       </Card>
 
-      <Card variant="outlined" sx={{ borderRadius: 3 }}>
+      <Card variant="outlined" sx={{ borderRadius: 0}}>
         <CardContent sx={{ p: { xs: 2, sm: 3.5 } }}>
           {!loaded ? (
             <Stack alignItems="center" sx={{ py: 6 }}><CircularProgress size={22} /></Stack>

@@ -101,7 +101,7 @@ function PlayerPill({ avg, accent = 'primary.main' }) {
           </Typography>
         </Box>
       }
-      sx={{ borderRadius:999, px:0.5, py:0.25, bgcolor:(t)=>t.palette.action.selected, '& .MuiChip-label': { py:0.5, width:'100%' } }}
+      sx={{ borderRadius: 0, px:0.5, py:0.25, bgcolor:(t)=>t.palette.action.selected, '& .MuiChip-label': { py:0.5, width:'100%' } }}
       variant="filled"
     />
   );
@@ -116,7 +116,7 @@ function Last10List({ title, loading, error, data, note }){
   }, [data]);
 
   return (
-    <Card variant="outlined" sx={{ borderRadius:1, flex:1, minWidth:0 }}>
+    <Card variant="outlined" sx={{ borderRadius: 0, flex:1, minWidth:0 }}>
       <CardContent sx={{ p:2 }}>
         <Typography variant="subtitle2" sx={{ fontWeight:700, mb:1 }}>
           {title}{record ? ` · ${record}` : ""}
@@ -240,7 +240,7 @@ function NarrativeBlock({ game, a, b, h2h }) {
   }
 
   return (
-    <Card variant="outlined" sx={{ borderRadius:1 }}>
+    <Card variant="outlined" sx={{ borderRadius: 0}}>
       <CardContent sx={{ p:2 }}>
         <Stack direction="row" alignItems="center" spacing={1.25} sx={{ mb:1.25 }}>
           <Stack direction="row" spacing={-0.6}>

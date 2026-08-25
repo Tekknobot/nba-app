@@ -67,7 +67,7 @@ export default function NbaNews({ compact = false }) {
   const shown = (items || []).slice(0, compact ? 7 : 12);
 
   return (
-    <Card variant="outlined" sx={{ borderRadius: 3, overflow: "hidden" }}>
+    <Card variant="outlined" sx={{ borderRadius: 0, overflow: "hidden" }}>
       <CardContent sx={{ p: { xs: 1.6, sm: 2 }, "&:last-child": { pb: { xs: 1.6, sm: 2 } } }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.25 }}>
           <Box>
@@ -95,10 +95,10 @@ export default function NbaNews({ compact = false }) {
               rel="noopener noreferrer"
               underline="none"
               color="inherit"
-              sx={{ borderRadius: 2.2, p: 0.7, mx: -0.7, "&:hover": { bgcolor: "action.hover" } }}
+              sx={{ borderRadius: 0, p: 0.7, mx: -0.7, "&:hover": { bgcolor: "action.hover" } }}
             >
               <Box sx={{ display: "grid", gridTemplateColumns: compact ? "76px minmax(0,1fr)" : { xs: "84px minmax(0,1fr)", sm: "112px minmax(0,1fr)" }, gap: 1.1, alignItems: "center" }}>
-                <Box sx={{ height: compact ? 58 : { xs: 64, sm: 76 }, borderRadius: 1.8, overflow: "hidden", bgcolor: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)" }}>
+                <Box sx={{ height: compact ? 58 : { xs: 64, sm: 76 }, borderRadius: 0, overflow: "hidden", bgcolor: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)" }}>
                   <StoryImage item={it} />
                 </Box>
                 <Box sx={{ minWidth: 0 }}>

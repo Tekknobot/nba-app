@@ -34,7 +34,7 @@ const theme = createTheme({
       disabledOpacity: 0.4,
     },
   },
-  shape: { borderRadius: 14 },
+  shape: { borderRadius: 0},
   typography: {
     fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     h4: { fontFamily: '"Bebas Neue", sans-serif', letterSpacing: 0.9 },
@@ -51,7 +51,7 @@ const theme = createTheme({
         body: { backgroundColor: BG },
         "*::selection": { backgroundColor: alpha(BLUE, 0.38) },
         "*::-webkit-scrollbar": { height: 8, width: 8 },
-        "*::-webkit-scrollbar-thumb": { backgroundColor: "rgba(255,255,255,.18)", borderRadius: 10 },
+        "*::-webkit-scrollbar-thumb": { backgroundColor: "rgba(255,255,255,.18)", borderRadius: 0},
       },
     },
     MuiPaper: { styleOverrides: { root: { backgroundImage: "none" } } },
@@ -68,17 +68,17 @@ const theme = createTheme({
     MuiButton: {
       defaultProps: { disableElevation: true },
       styleOverrides: {
-        root: { borderRadius: 11 },
+        root: { borderRadius: 0},
         containedPrimary: { background: `linear-gradient(135deg, ${BLUE}, #2563EB)` },
         outlined: { borderColor: "rgba(255,255,255,.16)", backgroundColor: "rgba(255,255,255,.025)" },
       },
     },
     MuiIconButton: {
-      styleOverrides: { root: { borderRadius: 11, border: "1px solid rgba(255,255,255,.08)" } },
+      styleOverrides: { root: { borderRadius: 0, border: "1px solid rgba(255,255,255,.08)" } },
     },
     MuiChip: {
       styleOverrides: {
-        root: { borderRadius: 999, fontWeight: 800 },
+        root: { borderRadius: 0, fontWeight: 800 },
         outlined: { borderColor: "rgba(255,255,255,.15)", backgroundColor: "rgba(255,255,255,.025)" },
       },
     },
