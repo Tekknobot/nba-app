@@ -1,6 +1,6 @@
 // src/components/Blog.jsx
 import React from "react";
-import { Box, Card, CardContent, Typography, Divider, LinearProgress, Stack } from "@mui/material";
+import { Box, Card, CardContent, Typography, Divider } from "@mui/material";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -23,59 +23,6 @@ function localISODate(tz = "America/Toronto", d = new Date()) {
   }).formatToParts(d);
   const get = (t) => parts.find(p => p.type === t)?.value;
   return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
-/** Read the plain text of a markdown node's children */
-function nodeText(children) {
-  if (Array.isArray(children)) return children.map(nodeText).join("");
-  if (typeof children === "string") return children;
-  if (children && typeof children === "object" && "props" in children) {
-    return nodeText(children.props.children);
-  }
-  return "";
-}
-function extractPercent(s) {
-  const m = s.match(/~?\s*(\d{1,3})%\s*\)/);
-  if (!m) return null;
-  const val = Math.max(0, Math.min(100, parseInt(m[1], 10)));
-  return Number.isFinite(val) ? val : null;
-}
-function extractLeftLabel(line) {
-  const bold = line.match(/\*\*(.+?)\*\*/);
-  if (bold) return bold[1];
-  const dash = line.split("—")[0]?.trim();
-  return dash && dash.length <= 48 ? dash : "Edge";
-}
-function extractRightLabel(line) {
-  const dot = line.split("·")[1]?.trim();
-  return dot || null;
-}
-
-function MdListItem(props) {
-  const txt = nodeText(props.children) || "";
-  const pct = extractPercent(txt);
-  if (pct == null) return <li {...props} />;
-
-  const left = extractLeftLabel(txt);
-  const right = extractRightLabel(txt);
-
-  return (
-    <li style={{ paddingTop: 8, paddingBottom: 8 }}>
-      <div>{props.children}</div>
-      <Stack spacing={0.5} sx={{ mt: 0.75 }}>
-        <Stack direction="row" justifyContent="space-between" sx={{ fontSize: 12, opacity: 0.8 }}>
-          <span>{left}</span>
-          <span>{right ? right : `${pct}%`}</span>
-        </Stack>
-        <LinearProgress
-          variant="determinate"
-          value={pct}
-          sx={{ height: 8, borderRadius: 999, "& .MuiLinearProgress-bar": { borderRadius: 999 } }}
-          aria-label={`Edge ${pct}%`}
-        />
-      </Stack>
-    </li>
-  );
 }
 
 export default function Blog() {
@@ -108,7 +55,7 @@ export default function Blog() {
         <CardContent sx={{ p: { xs: 2, sm: 4 } }}>
           <Typography variant="h4" sx={{ fontWeight: 800, mb: 0.5 }}>{title}</Typography>
           <Typography variant="caption" sx={{ opacity: 0.7, display: "block", mb: 2 }}>
-            Updated daily · Original summaries based on the app’s calendar, matchup helper, and Model edge.
+            Updated daily · Original summaries based on the app’s calendar, matchup context, and recent form.
           </Typography>
           <Divider sx={{ mb: 3 }} />
 
@@ -120,7 +67,7 @@ export default function Blog() {
                        "& ul": { pl: 3, mb: 2 },
                        "& li": { mb: 0.5 },
                        "& hr": { my: 3, opacity: 0.2 } }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ li: MdListItem }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} >
                 {bodyMd}
               </ReactMarkdown>
             </Box>

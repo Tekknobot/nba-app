@@ -11,15 +11,11 @@ import CloseIcon from "@mui/icons-material/Close";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import "@fontsource/bebas-neue";
 
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import CancelIcon from '@mui/icons-material/Cancel';
-
 import SportsBasketballIcon from "@mui/icons-material/SportsBasketball";
 import GameComparePanel from "./GameComparePanel";
 
 import { formatGameLabel } from "../utils/datetime";
 import NbaNews from "./NbaNews";
-import { API_BASE } from "../api/base";
 
 import Link from "@mui/material/Link";
 import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
@@ -47,215 +43,22 @@ function addMonths(d,n){ const x=new Date(d); x.setDate(1); x.setMonth(x.getMont
 function dateKeyFromDate(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function daysInMonth(year, month){ const out=[]; const d=new Date(year,month,1); while(d.getMonth()===month){ out.push(new Date(d)); d.setDate(d.getDate()+1); } return out; }
 
-/* ========= team code lookup for schedule ========= */
-const TEAM_CODE = {
-  "Atlanta Hawks":"ATL","Boston Celtics":"BOS","Brooklyn Nets":"BKN","Charlotte Hornets":"CHA","Chicago Bulls":"CHI",
-  "Cleveland Cavaliers":"CLE","Dallas Mavericks":"DAL","Denver Nuggets":"DEN","Detroit Pistons":"DET","Golden State Warriors":"GSW",
-  "Houston Rockets":"HOU","Indiana Pacers":"IND","LA Clippers":"LAC","Los Angeles Lakers":"LAL","Memphis Grizzlies":"MEM",
-  "Miami Heat":"MIA","Milwaukee Bucks":"MIL","Minnesota Timberwolves":"MIN","New Orleans Pelicans":"NOP","New York Knicks":"NYK",
-  "Oklahoma City Thunder":"OKC","Orlando Magic":"ORL","Philadelphia 76ers":"PHI","Phoenix Suns":"PHX","Portland Trail Blazers":"POR",
-  "Sacramento Kings":"SAC","San Antonio Spurs":"SAS","Toronto Raptors":"TOR","Utah Jazz":"UTA","Washington Wizards":"WAS"
-};
-
-/* ========= predictions attach/merge ========= */
-function norm(s) { return String(s || "").trim().toUpperCase(); }
-function codeOfTeam(t) { if (!t) return ""; if (typeof t === "string") return norm(t); return norm(t.code || t.abbr || t.abbreviation || t.name); }
-function nameOfTeam(t) { if (!t) return ""; if (typeof t === "string") return norm(t); return norm(t.name || t.full_name || t.team || t.code || t.abbr || t.abbreviation); }
-function keyVariants(dateKey, away, home) {
-  const d = norm(dateKey); const A = codeOfTeam(away), H = codeOfTeam(home); const An = nameOfTeam(away), Hn = nameOfTeam(home);
-  return [`${d}|${A}@${H}`,`${d}|${H}vs${A}`,`${d}|${H}@${A}`,`${d}|${An}@${Hn}`,`${d}|${Hn}@${An}`,`${d}|${A}|${H}`,`${d}|${H}|${A}`];
+/* ========= keyless month schedule fetch ========= */
+async function fetchMonthSchedulePublic(year, monthIndex) {
+  const params = new URLSearchParams({
+    action: "month",
+    year: String(year),
+    month: String(monthIndex + 1),
+  });
+  const res = await fetch(`/api/nba-data?${params.toString()}`, { cache: "no-store" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.detail || json?.error || `NBA data HTTP ${res.status}`);
+  return Array.isArray(json?.games) ? json.games : [];
 }
-async function fetchPredictionsRange(startISO, endISO) {
-  const base = (typeof API_BASE === "string" && API_BASE) ? API_BASE : "";
-  if (base) {
-    try {
-      const url = `${base}/api/predictions?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`;
-      const res = await fetch(url, { cache: "no-store" });
-      if (res.ok) {
-        const j = await res.json();
-        if (j && (Array.isArray(j) || typeof j === "object")) return j;
-      }
-    } catch {}
-  }
-  try {
-    const monthKey = (startISO || "").slice(0, 7);
-    const local = localStorage.getItem(`preds:${monthKey}`);
-    if (local) {
-      const parsed = JSON.parse(local);
-      if (parsed && (Array.isArray(parsed) || typeof parsed === "object")) return parsed;
-    }
-  } catch {}
-  return {};
-}
-function resolveFromContainer(container, dateKey, away, home) {
-  if (container && !Array.isArray(container)) {
-    for (const k of keyVariants(dateKey, away, home)) { const v = container[k]; if (v) return v; }
-  }
-  if (Array.isArray(container)) {
-    for (const item of container) {
-      const d  = norm(item.date || item.gameDate || item.d);
-      const aw = norm(item.away || item.awayCode || item.visitor || item.v);
-      const hm = norm(item.home || item.homeCode || item.h);
-      if (d !== norm(dateKey)) continue;
-      const codesMatch =
-        (aw === codeOfTeam(away) || aw === nameOfTeam(away)) &&
-        (hm === codeOfTeam(home) || hm === nameOfTeam(home));
-      const swappedMatch =
-        (aw === codeOfTeam(home) || aw === nameOfTeam(home)) &&
-        (hm === codeOfTeam(away) || hm === nameOfTeam(away));
-      if (codesMatch || swappedMatch) return item;
-    }
-  }
-  return null;
-}
-async function attachPredictionsForMonth(rows) {
-  if (!rows?.length) return rows;
-  const startISO = rows[0].dateKey;
-  const endISO   = rows[rows.length - 1].dateKey;
-  const container = await fetchPredictionsRange(startISO, endISO);
-  for (const r of rows) {
-    const found = resolveFromContainer(container, r.dateKey, r.away, r.home);
-    if (!found) continue;
-    let pick = found.pick || found.winner || found.predictedWinner || found.pred;
-    if (pick) {
-      const p = String(pick).trim().toUpperCase();
-      if (p === "HOME") pick = r.home?.code;
-      else if (p === "AWAY") pick = r.away?.code;
-      r.model = { ...(r.model || {}), predictedWinner: norm(pick) };
-    }
-    const phRaw = found.pHome ?? found.p_home ?? found.homeProb ?? found.probHome ?? found.prob_home;
-    const ph = Number(phRaw);
-    if (Number.isFinite(ph)) {
-      r.model = { ...(r.model || {}), pHome: ph };
-    }
-  }
-  return rows;
-}
-
-/* ========= month schedule fetch ========= */
-function monthRange(year, month){ const start = new Date(year, month, 1); const end = new Date(year, month + 1, 0);
-  const fmt = (d)=> `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  return { start: fmt(start), end: fmt(end) };
-}
-
-function bdlHeaders() {
-  const raw = process.env.REACT_APP_BDL_API_KEY || "";
-  if (!raw) return {};
-  // some BDL setups expect 'Bearer ', others accept raw — sending Bearer is always safe
-  const value = raw.toLowerCase().startsWith("bearer ") ? raw : `Bearer ${raw}`;
-  return { Authorization: value };
-}
-
-async function fetchMonthScheduleBDL(year, month) {
-  const { start, end } = monthRange(year, month);
-  const headers = bdlHeaders();
-  const per_page = 100;
-  let page = 1;
-  const byId = new Map();
-  while (true) {
-    const params = new URLSearchParams({ start_date: start, end_date: end, per_page: String(per_page), page: String(page) });
-    const url = `https://api.balldontlie.io/v1/games?${params.toString()}`;
-    const res = await fetch(url, { headers });
-    if (res.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!res.ok) throw new Error(`BDL HTTP ${res.status}`);
-    const json = await res.json();
-    const data = Array.isArray(json?.data) ? json.data : [];
-    const nextPage = json?.meta?.next_page || null;
-
-    for (const g of data) {
-      if (g?.postseason) continue;
-      const dateISO = (g?.date || "").slice(0, 10);
-      if (!dateISO) continue;
-
-      const homeName = g?.home_team?.full_name || g?.home_team?.name || g?.home_team?.abbreviation;
-      const awayName = g?.visitor_team?.full_name || g?.visitor_team?.name || g?.visitor_team?.abbreviation;
-      if (!homeName || !awayName) continue;
-
-      const raw = g?.date ? new Date(g.date) : null;
-      const hasClock = !!(raw && !Number.isNaN(raw.getTime()) && raw.getUTCHours() !== 0);
-      const isoFull = hasClock ? raw.toISOString() : `${dateISO}T12:00:00Z`;
-
-      byId.set(g.id, {
-        id: g.id,
-        _iso: isoFull,
-        dateKey: dateISO,
-        status: g?.status || "Scheduled",
-        hasClock,
-        homeScore: Number.isFinite(g?.home_team_score) ? g.home_team_score : null,
-        awayScore: Number.isFinite(g?.visitor_team_score) ? g.visitor_team_score : null,
-        et: (g?.status || "").toLowerCase().includes("scheduled") ? "TBD" : (g?.status || "TBD"),
-        seasonStageId: 2,
-        home: { name: homeName, code: TEAM_CODE[homeName] || (g?.home_team?.abbreviation || homeName) },
-        away: { name: awayName, code: TEAM_CODE[awayName] || (g?.visitor_team?.abbreviation || awayName) },
-      });
-    }
-
-    if (!nextPage) break;
-    page = nextPage;
-  }
-
-  const rows = Array.from(byId.values());
-  rows.sort((a, b) =>
-    (a._iso || "").localeCompare(b._iso || "") ||
-    (a.home?.name || "").localeCompare(b.home?.name || "")
-  );
-  return rows;
-}
-
-/* ========= verdict helpers (for drawer header & game cards) ========= */
-function codeify(teamObjOrStr, fallback = '') {
-  if (!teamObjOrStr) return fallback;
-  if (typeof teamObjOrStr === 'string') return teamObjOrStr.toUpperCase();
-  return (teamObjOrStr.code || teamObjOrStr.abbr || teamObjOrStr.name || fallback).toUpperCase();
-}
-function getPredictedWinnerCode(game) {
-  const homeCode = codeify(game?.home, null);
-  const awayCode = codeify(game?.away, null);
-  const stringPickCandidates = [
-    game?.model?.predictedWinner, game?.model?.winner, game?.prediction?.winner,
-    game?.prediction?.predictedWinner, game?.predictedWinner, game?.predictedWinnerCode, game?.odds?.modelPick,
-  ];
-  for (const c of stringPickCandidates) {
-    if (!c) continue;
-    const raw = String(typeof c === "string" ? c : (c.code || c.abbr || c.name || "")).toUpperCase().trim();
-    if (raw === "HOME" && homeCode) return homeCode;
-    if (raw === "AWAY" && awayCode) return awayCode;
-    const code = codeify(raw, null);
-    if (code) return code;
-  }
-  const pHome = Number(game?.model?.pHome);
-  if (Number.isFinite(pHome) && homeCode && awayCode) return pHome > 0.5 ? homeCode : awayCode;
-  return null;
-}
-function getActualWinnerCode(game) {
-  const home = codeify(game?.home, 'HOME');
-  const away = codeify(game?.away, 'AWAY');
-  const hs = Number(game?.homeScore ?? NaN);
-  const as = Number(game?.awayScore ?? NaN);
-  if (Number.isNaN(hs) || Number.isNaN(as)) return null;
-  if (hs === as) return 'TIE';
-  return hs > as ? home : away;
-}
-function modelVerdict(game) {
-  const isFinal = (game?.status || '').toLowerCase().includes('final');
-  if (!isFinal) return null;
-  const actual = getActualWinnerCode(game);
-  const predicted = getPredictedWinnerCode(game);
-  if (!actual || !predicted || actual === 'TIE') return null;
-  const pHome = Number(game?.model?.pHome);
-  const pct = Number.isFinite(pHome) ? Math.round(pHome * 100) : null;
-  return {
-    state: actual === predicted ? 'correct' : 'incorrect',
-    tooltip: pct != null ? `Predicted ${predicted} (${pct}%), actual ${actual}` : `Predicted ${predicted}, actual ${actual}`,
-  };
-}
-function headerVerdict(game) { return modelVerdict(game); }
 
 /* ========= Drawer (uses shared panel) ========= */
 function ComparisonDrawer({ open, onClose, game }) {
   if (!open || !game) return null;
-  const verdict = headerVerdict(game);
-
   return (
     <Drawer
       anchor="right" open={open} onClose={onClose}
@@ -267,10 +70,6 @@ function ComparisonDrawer({ open, onClose, game }) {
           Recent form — {game?.away?.code} @ {game?.home?.code}
         </Typography>
         <Stack direction="row" alignItems="center" spacing={1}>
-          {verdict && (verdict.state === "correct"
-            ? <Tooltip title={verdict.tooltip}><Chip size="small" color="success" variant="outlined" icon={<CheckCircleIcon fontSize="small" />} label="Model" /></Tooltip>
-            : <Tooltip title={verdict.tooltip}><Chip size="small" color="error" variant="outlined" icon={<CancelIcon fontSize="small" />} label="Model" /></Tooltip>
-          )}
           <IconButton onClick={onClose}><CloseIcon /></IconButton>
         </Stack>
       </Stack>
@@ -506,11 +305,7 @@ export default function AllGamesCalendar(){
           return;
         }
 
-        let rows = await fetchMonthScheduleBDL(y, mIdx);
-        try {
-          rows = await attachPredictionsForMonth(rows);
-          console.log('[predictions]', { monthKey, rowsWithModel: rows.filter(r => r.model && (r.model.predictedWinner || Number.isFinite(r.model.pHome))).length });
-        } catch {}
+        const rows = await fetchMonthSchedulePublic(y, mIdx);
         if (cancelled) return;
 
         const next = new Map(monthCache);
@@ -576,7 +371,7 @@ export default function AllGamesCalendar(){
           </Typography>
           <Typography variant="body2" sx={{ opacity: 0.9 }}>
             Browse the NBA schedule month by month, tap on any game to see both teams’ recent
-            form, a light win probability estimate (“Model edge”), and quick matchup notes.
+            form, head-to-head history, player stat snapshots, and quick matchup notes.
             It’s built to be clean, mobile-friendly, and fun to explore.
           </Typography>
         </CardContent>
@@ -653,8 +448,8 @@ export default function AllGamesCalendar(){
             </Typography>
             <Typography variant="body2" sx={{ opacity: 0.9, mb: 1 }}>
               {inOffseasonView
-                ? "The NBA regular season begins in October. Until tip-off, you can still read the latest news and learn how our simple “Model edge” works below."
-                : "There aren’t any scheduled games in this month’s view. Try the arrows to switch months, or explore the news and our quick model explainer below."}
+                ? "The NBA regular season begins in October. Until tip-off, you can still read the latest news and browse previous matchup context."
+                : "There aren’t any scheduled games in this month’s view. Try the arrows to switch months, or explore the latest NBA news below."}
             </Typography>
 
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
@@ -664,7 +459,7 @@ export default function AllGamesCalendar(){
                 variant="outlined"
                 size="small"
               >
-                How “Model edge” works
+                About PIVT
               </Button>
               <Button
                 href="https://www.nba.com/news"

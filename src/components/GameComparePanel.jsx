@@ -6,8 +6,6 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import CancelIcon from "@mui/icons-material/Cancel";
 
 // Explain *why* there is no current-season data at the selected anchor date
 function noDataReason(anchorISO) {
@@ -24,37 +22,8 @@ function noDataReason(anchorISO) {
 /* ====================== small utils ====================== */
 const nf1 = (v) => (v ?? 0).toFixed(1);
 const clampISODateOnly = (iso) => (iso || "").slice(0, 10);
-const parseMinToNumber = (minStr) => {
-  if (!minStr || typeof minStr !== "string") return 0;
-  const [m, s] = minStr.split(":").map(Number);
-  return (isFinite(m) ? m : 0) + (isFinite(s) ? s / 60 : 0);
-};
-const bdlHeaders = () => {
-  const key = process.env.REACT_APP_BDL_API_KEY;
-  return key ? { Authorization: key } : {};
-};
-const isoDaysAgo = (n, from = new Date()) => {
-  const d = new Date(from); d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0,10);
-};
-const clamp01 = (x) => Math.max(0, Math.min(1, x));
-const logit = (p) => Math.log(Math.max(1e-9, Math.min(1-1e-9, p)) / (1 - Math.max(1e-9, Math.min(1-1e-9, p))));
-const ilogit = (z) => 1 / (1 + Math.exp(-z));
-
-/* ====================== maps ====================== */
-const BDL_TEAM_ID = {
-  ATL:1, BOS:2, BKN:3, CHA:4, CHI:5, CLE:6, DAL:7, DEN:8, DET:9,
-  GSW:10, HOU:11, IND:12, LAC:13, LAL:14, MEM:15, MIA:16, MIL:17,
-  MIN:18, NOP:19, NYK:20, OKC:21, ORL:22, PHI:23, PHX:24, POR:25,
-  SAC:26, SAS:27, TOR:28, UTA:29, WAS:30
-};
 
 /* ====================== season windows ====================== */
-function windowISO({ anchorISO, days }) {
-  const anchor = anchorISO || new Date().toISOString().slice(0,10);
-  const d = new Date(anchor); d.setDate(d.getDate() - days);
-  return { start: d.toISOString().slice(0,10), end: anchor };
-}
 function seasonWindowUpTo(anchorISO){
   const d = new Date(anchorISO || new Date());
   const endYear = (d.getMonth() >= 9) ? d.getFullYear() + 1 : d.getFullYear();
@@ -62,464 +31,40 @@ function seasonWindowUpTo(anchorISO){
   const end   = clampISODateOnly(anchorISO) || `${endYear}-06-30`;
   return { start, end, endYear };
 }
-function lastCompletedSeasonEndYear(today = new Date()){
-  const y = today.getFullYear();
-  const m = today.getMonth(); // 0=Jan
-  return (m >= 6) ? y : (y - 1);
-}
 
-/* ====================== verdict helpers ====================== */
-function codeify(teamObjOrStr, fallback = '') {
-  if (!teamObjOrStr) return fallback;
-  if (typeof teamObjOrStr === 'string') return teamObjOrStr.toUpperCase();
-  return (teamObjOrStr.code || teamObjOrStr.abbr || teamObjOrStr.name || fallback).toUpperCase();
-}
-function getActualWinnerCode(game) {
-  const home = codeify(game?.home, 'HOME');
-  const away = codeify(game?.away, 'AWAY');
-  const hs = Number(game?.homeScore ?? NaN);
-  const as = Number(game?.awayScore ?? NaN);
-  if (Number.isNaN(hs) || Number.isNaN(as)) return null;
-  if (hs === as) return 'TIE';
-  return hs > as ? home : away;
-}
-function getPredictedWinnerCode(game) {
-  const homeCode = codeify(game?.home, null);
-  const awayCode = codeify(game?.away, null);
-  const pick = String(game?.model?.predictedWinner || "").toUpperCase().trim();
-  if (pick === "HOME" && homeCode) return homeCode;
-  if (pick === "AWAY" && awayCode) return awayCode;
-  if (pick) return pick;
-  const pHome = Number(game?.model?.pHome);
-  if (Number.isFinite(pHome) && homeCode && awayCode) return pHome > 0.5 ? homeCode : awayCode;
-  return null;
-}
-function modelVerdict(game) {
-  const isFinal = (game?.status || '').toLowerCase().includes('final');
-  if (!isFinal) return null;
-  const actual = getActualWinnerCode(game);
-  const predicted = getPredictedWinnerCode(game);
-  if (!actual || !predicted || actual === 'TIE') return null;
-  const pHome = Number(game?.model?.pHome);
-  const pct = Number.isFinite(pHome) ? Math.round(pHome * 100) : null;
-  return {
-    state: actual === predicted ? 'correct' : 'incorrect',
-    tooltip: pct != null ? `Predicted ${predicted} (${pct}%), actual ${actual}` : `Predicted ${predicted}, actual ${actual}`,
-    label: "Model"
-  };
-}
-
-// --- pick the “season end year” for a given anchor date ---
-function seasonEndYearFrom(anchorISO) {
-  const d = anchorISO ? new Date(anchorISO) : new Date();
-  const m = d.getMonth(); // 0..11
-  return (m >= 9) ? d.getFullYear() + 1 : d.getFullYear();
-}
-
-/* ====================== hydrate final scores when missing ====================== */
-async function fetchGameByIdBDL(gameId){
-  if (!gameId) throw new Error("Missing game id");
-  const url = `https://api.balldontlie.io/v1/games/${gameId}`;
-  const r = await fetch(url, { headers: bdlHeaders() });
-  if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-  const g = await r.json();
-  return {
-    id: g?.id,
-    status: g?.status || "",
-    homeScore: Number.isFinite(g?.home_team_score) ? g.home_team_score : null,
-    awayScore: Number.isFinite(g?.visitor_team_score) ? g.visitor_team_score : null,
-  };
-}
-
-/* ====================== BDL fetchers used by the panel ====================== */
-async function fetchTeamLast10UpToBDL(teamAbbr, anchorISO){
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-  const { start, end } = seasonWindowUpTo(anchorISO);
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start);
-  u.searchParams.set("end_date", end);
-  u.searchParams.set("postseason", "false");
-  u.searchParams.set("per_page", "100");
-  let page = 1, all = [];
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers: bdlHeaders() });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    all.push(...(j?.data||[]));
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-  const finals = all
-    .filter(g => /final/i.test(g?.status||""))
-    .filter(g => clampISODateOnly(g?.date) <= clampISODateOnly(end))
-    .sort((a,b)=> new Date(b.date) - new Date(a.date))
-    .slice(0,10)
-    .map(g=>{
-      const home=(g.home_team?.abbreviation||"HOME").toUpperCase();
-      const away=(g.visitor_team?.abbreviation||"AWAY").toUpperCase();
-      const isHome = home===teamAbbr;
-      const my=isHome?g.home_team_score:g.visitor_team_score;
-      const their=isHome?g.visitor_team_score:g.home_team_score;
-      return {
-        date: clampISODateOnly(g.date),
-        opp: isHome?away:home,
-        homeAway: isHome ? "Home" : "Away",
-        result: my>their?"W":my<their?"L":"T",
-        score: `${home} ${g.home_team_score} - ${away} ${g.visitor_team_score}`,
-      };
-    });
-  return { team: teamAbbr, games: finals };
-}
-
-async function fetchHeadToHeadBDL(teamA_abbr, teamB_abbr, { start, end }){
-  const teamId = BDL_TEAM_ID[teamA_abbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamA_abbr}`);
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start);
-  u.searchParams.set("end_date", end);
-  u.searchParams.set("per_page", "100");
-  let page=1, all=[];
-  while(true){
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers: bdlHeaders() });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    all.push(...(j?.data||[]));
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-  const vs = all.filter(g=>{
-    const h=(g?.home_team?.abbreviation||"").toUpperCase();
-    const v=(g?.visitor_team?.abbreviation||"").toUpperCase();
-    return h===teamB_abbr || v===teamB_abbr;
-  });
-  let aWins=0, bWins=0;
-  for(const g of vs){
-    const hs=g?.home_team_score, as=g?.visitor_team_score;
-    if (!Number.isFinite(hs)||!Number.isFinite(as)) continue;
-    const homeAbbr=(g?.home_team?.abbreviation||"").toUpperCase();
-    const aIsHome=homeAbbr===teamA_abbr;
-    const aScore = aIsHome?hs:as;
-    const bScore = aIsHome?as:hs;
-    if (aScore>bScore) aWins++; else if (bScore>aScore) bWins++;
-  }
-  return { aWins, bWins };
-}
-
-// small helper: fetch JSON and surface 400 bodies for debug
-async function fetchJsonOrThrow(url, opts = {}) {
-  const r = await fetch(url, { ...opts, cache: "no-store" });
-  const txt = await r.text();
-  let body = null;
-  try { body = txt ? JSON.parse(txt) : null; } catch {}
-  if (!r.ok) {
-    console.warn("[BDL]", r.status, String(url), body || txt);
-    const e = new Error(`BDL ${r.status}`);
-    e.status = r.status; e.body = body || txt;
-    throw e;
-  }
+/* ====================== keyless PIVT NBA data client ====================== */
+async function nbaData(action, params = {}) {
+  const q = new URLSearchParams({ action, ...Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => [k, String(v)])
+  )});
+  const r = await fetch(`/api/nba-data?${q.toString()}`, { cache: "no-store" });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body?.detail || body?.error || `NBA data HTTP ${r.status}`);
   return body;
 }
 
-// roster → ids
-async function fetchTeamRosterByTeamIdBDL(teamAbbr, { perPage = 100 } = {}) {
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-  const headers = bdlHeaders();
-  let page = 1, out = [];
-  const u = new URL("https://api.balldontlie.io/v1/players");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("per_page", String(perPage));
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const j = await fetchJsonOrThrow(u, { headers });
-    const arr = Array.isArray(j?.data) ? j.data : [];
-    out.push(...arr);
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-  return out; // array of players with .id
+async function fetchGameByIdPublic(gameId){
+  if (!gameId) throw new Error("Missing game id");
+  const { game } = await nbaData("game", { id: gameId });
+  return game || {};
 }
 
-// batch season averages
-async function fetchSeasonAveragesBatchBDL(playerIds, seasonEndYear) {
-  if (!playerIds?.length) return [];
-  const headers = bdlHeaders();
-  const u = new URL("https://api.balldontlie.io/v1/season_averages");
-  u.searchParams.set("season", String(seasonEndYear));
-  for (const id of playerIds) u.searchParams.append("player_ids[]", String(id));
-  const j = await fetchJsonOrThrow(u, { headers });
-  return Array.isArray(j?.data) ? j.data : [];
+async function fetchTeamLast10UpToPublic(teamAbbr, anchorISO){
+  const body = await nbaData("team-last10", { team: teamAbbr, anchor: anchorISO });
+  return { team: body?.team || teamAbbr, games: Array.isArray(body?.games) ? body.games : [] };
 }
 
-async function fetchRecentPlayerAveragesBDL(
-  teamAbbr,
-  { days = 21, anchorISO = null, topN = 3 } = {}
-) {
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-  const headers = bdlHeaders();
-  const { start, end } = windowISO({ anchorISO, days });
-
-  const minToNum = (m) => {
-    const [mm, ss] = String(m || "0:00").split(":").map(Number);
-    return (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
-  };
-
-  const aggregateRecent = (rows) => {
-    const filtered = rows.filter(
-      (s) => (s?.team?.abbreviation || s?.team_abbreviation || "").toUpperCase() === teamAbbr
-    );
-    const by = new Map();
-    for (const s of filtered) {
-      const pid = Number(s?.player?.id ?? s?.player_id);
-      if (!Number.isFinite(pid)) continue;
-      if (!by.has(pid)) by.set(pid, { player_id: pid, player: s.player || null, gp: 0, min: 0, pts: 0, reb: 0, ast: 0 });
-      const p = by.get(pid);
-      p.gp += 1;
-      const [mm, ss] = String(s?.min || s?.minutes || "0:00").split(":").map(Number);
-      const mins = (isFinite(mm) ? mm : 0) + (isFinite(ss) ? ss / 60 : 0);
-      p.min += mins;
-      p.pts += Number(s?.pts || 0);
-      p.reb += Number(s?.reb || 0);
-      p.ast += Number(s?.ast || 0);
-    }
-    let players = Array.from(by.values()).map((p) => ({
-      player_id: p.player_id,
-      player: p.player,
-      min: `${Math.floor((p.min / p.gp) || 0)}:${String(
-        Math.round((((p.min / p.gp) % 1) * 60)) || 0
-      ).padStart(2, "0")}`,
-      pts: (p.pts / p.gp) || 0,
-      reb: (p.reb / p.gp) || 0,
-      ast: (p.ast / p.gp) || 0,
-    }));
-    players.sort((a, b) => {
-      const bm = minToNum(b.min), am = minToNum(a.min);
-      if (bm !== am) return bm - am;
-      return (b.pts || 0) - (a.pts || 0);
-    });
-    return players.slice(0, topN);
-  };
-
-  // 1) Try team_ids[] window
-  try {
-    const u = new URL("https://api.balldontlie.io/v1/stats");
-    u.searchParams.set("team_ids[]", String(teamId));
-    u.searchParams.set("start_date", start);
-    u.searchParams.set("end_date", end);
-    u.searchParams.set("postseason", "false");
-    u.searchParams.set("per_page", "100");
-
-    let page = 1, rows = [];
-    while (true) {
-      u.searchParams.set("page", String(page));
-      const j = await fetchJsonOrThrow(u, { headers });
-      const data = Array.isArray(j?.data) ? j.data : [];
-      rows.push(...data);
-      if (!j?.meta?.next_page) break;
-      page = j.meta.next_page;
-    }
-
-    const players = aggregateRecent(rows);
-    if (players.length) return { players, _mode: "recent" };
-  } catch (e) {
-    console.warn("[TopPlayers] team_ids window failed; retrying with player_ids[]", e);
-  }
-
-  // 2) Retry player_ids[] window
-  try {
-    const roster = await fetchTeamRosterByTeamIdBDL(teamAbbr);
-    const ids = Array.from(new Set(roster.map((p) => Number(p?.id)).filter(Boolean))).slice(0, 30);
-    if (ids.length) {
-      const u2 = new URL("https://api.balldontlie.io/v1/stats");
-      u2.searchParams.set("start_date", start);
-      u2.searchParams.set("end_date", end);
-      u2.searchParams.set("postseason", "false");
-      u2.searchParams.set("per_page", "100");
-      ids.forEach((id) => u2.searchParams.append("player_ids[]", String(id)));
-
-      let page = 1, rows = [];
-      while (true) {
-        u2.searchParams.set("page", String(page));
-        const j2 = await fetchJsonOrThrow(u2, { headers });
-        const data2 = Array.isArray(j2?.data) ? j2.data : [];
-        rows.push(...data2);
-        if (!j2?.meta?.next_page) break;
-        page = j2.meta.next_page;
-      }
-
-      const players = aggregateRecent(rows);
-      if (players.length) return { players, _mode: "recent" };
-    }
-  } catch (e2) {
-    console.warn("[TopPlayers] player_ids window failed; falling back to season averages", e2);
-  }
-
-  // 3) Season averages fallback
-  const roster = await fetchTeamRosterByTeamIdBDL(teamAbbr).catch(() => []);
-  const ids = Array.from(new Set(roster.map((p) => Number(p?.id)).filter(Boolean))).slice(0, 30);
-  const season = seasonEndYearFrom(anchorISO);
-  let avgs = await fetchSeasonAveragesBatchBDL(ids, season);
-  let usedSeason = season;
-  if (!avgs?.length) {
-    avgs = await fetchSeasonAveragesBatchBDL(ids, season - 1);
-    usedSeason = season - 1;
-  }
-  const byId = new Map(roster.map((p) => [Number(p?.id), p]));
-
-  let players = (avgs || []).map((a) => ({
-    player_id: a.player_id,
-    player: byId.get(Number(a.player_id)) || null,
-    min: a.min || "0:00",
-    pts: a.pts || 0,
-    reb: a.reb || 0,
-    ast: a.ast || 0,
-  }));
-  players.sort((x, y) => {
-    const ym = minToNum(y.min), xm = minToNum(x.min);
-    if (ym !== xm) return ym - xm;
-    return (y.pts || 0) - (x.pts || 0);
-  });
-
-  return { players: players.slice(0, topN), _mode: "season-fallback", _season: usedSeason };
+async function fetchHeadToHeadPublic(teamA_abbr, teamB_abbr, { start, end }){
+  const body = await nbaData("h2h", { a: teamA_abbr, b: teamB_abbr, start, end });
+  return { aWins: Number(body?.aWins || 0), bWins: Number(body?.bWins || 0) };
 }
 
-/* ====================== prior edge (more accurate model) ====================== */
-async function fetchTeamSeasonPointDiffBDL(teamAbbr, seasonEndYear){
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) throw new Error(`Unknown team code: ${teamAbbr}`);
-  const start = `${seasonEndYear-1}-10-01`;
-  const end   = `${seasonEndYear}-06-30`;
-
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", start);
-  u.searchParams.set("end_date", end);
-  u.searchParams.set("postseason", "false");
-  u.searchParams.set("per_page", "100");
-
-  let page = 1, gp = 0, sumMargin = 0;
-  while (true) {
-    u.searchParams.set("page", String(page));
-    const r = await fetch(u, { headers: bdlHeaders() });
-    if (r.status === 401) throw new Error("BDL 401 (missing/invalid API key). Add REACT_APP_BDL_API_KEY in .env.local and restart.");
-    if (!r.ok) throw new Error(`BDL HTTP ${r.status}`);
-    const j = await r.json();
-    const data = Array.isArray(j?.data) ? j.data : [];
-    for (const g of data) {
-      const hs = g?.home_team_score, as = g?.visitor_team_score;
-      if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
-      const home = (g?.home_team?.abbreviation || "").toUpperCase();
-      const isHome = home === teamAbbr;
-      const my = isHome ? hs : as;
-      const opp = isHome ? as : hs;
-      gp += 1; sumMargin += (my - opp);
-    }
-    if (!j?.meta?.next_page) break;
-    page = j.meta.next_page;
-  }
-  const diff = gp ? (sumMargin / gp) : 0;
-  return { gp, diff };
-}
-async function fetchTinyPreseasonNudgeBDL(teamAbbr){
-  const teamId = BDL_TEAM_ID[teamAbbr];
-  if (!teamId) return 0;
-  const u = new URL("https://api.balldontlie.io/v1/games");
-  u.searchParams.set("team_ids[]", String(teamId));
-  u.searchParams.set("start_date", isoDaysAgo(30));
-  u.searchParams.set("end_date", new Date().toISOString().slice(0,10));
-  u.searchParams.set("per_page", "100");
-
-  const r = await fetch(u, { headers: bdlHeaders() });
-  if (!r.ok) return 0;
-  const j = await r.json();
-  const data = Array.isArray(j?.data) ? j.data : [];
-
-  let gp = 0, sumMargin = 0;
-  for (const g of data) {
-    if (!/final/i.test(g?.status || "")) continue;
-    const hs = g?.home_team_score, as = g?.visitor_team_score;
-    if (!Number.isFinite(hs) || !Number.isFinite(as)) continue;
-    const home = (g?.home_team?.abbreviation || "").toUpperCase();
-    const isHome = home === teamAbbr;
-    const my = isHome ? hs : as;
-    const opp = isHome ? as : hs;
-    gp += 1; sumMargin += (my - opp);
-  }
-  if (!gp) return 0;
-  return (sumMargin / gp) * 0.2;
-}
-const HCA_POINTS = 2.3;
-const logistic = (pointAdv, scale = 6.5) => 1 / (1 + Math.exp(-Math.max(-50, Math.min(50, pointAdv/scale))));
-async function computePriorEdgeBDL(homeCode, awayCode){
-  const prevSeasonEnd = lastCompletedSeasonEndYear();
-  const [homePrev, awayPrev] = await Promise.all([
-    fetchTeamSeasonPointDiffBDL(homeCode, prevSeasonEnd),
-    fetchTeamSeasonPointDiffBDL(awayCode, prevSeasonEnd),
-  ]);
-  const [hPre, aPre] = await Promise.all([
-    fetchTinyPreseasonNudgeBDL(homeCode),
-    fetchTinyPreseasonNudgeBDL(awayCode),
-  ]);
-  const pointAdv = (homePrev.diff - awayPrev.diff) + HCA_POINTS + (hPre - aPre);
-  const pHome = logistic(pointAdv, 6.5);
+async function fetchRecentPlayerAveragesPublic(teamAbbr, { days = 21, anchorISO = null, topN = 3 } = {}) {
+  const body = await nbaData("top-players", { team: teamAbbr, days, anchor: anchorISO, topN });
   return {
-    pHome,
-    factors: [
-      { label: "Last season diff (H−A)", value: `${(homePrev.diff - awayPrev.diff).toFixed(2)} pts/g` },
-      { label: "Home-court", value: `${HCA_POINTS.toFixed(1)} pts` },
-      { label: "Preseason nudge", value: `${(hPre - aPre).toFixed(2)} pts` },
-    ],
-    mode: "prior",
-    confidence: 0.25
-  };
-}
-
-/* ====================== recent + blend ====================== */
-function computeRecentEdgeFromLast10(awayPack, homePack){
-  const away = awayPack?.games || [];
-  const home = homePack?.games || [];
-  if (!home.length || !away.length) return null;
-  const W = (arr)=>arr.filter(g=>g.result==='W').length;
-  const L = (arr)=>arr.filter(g=>g.result==='L').length;
-  const homeEdge = (W(home)-L(home)) - (W(away)-L(away));  // [-10..+10]
-  const pHome = 1 / (1 + Math.exp(-homeEdge/3.0));
-  return {
-    pHome,
-    factors: [{ label: "Recent form (H−A)", value: `${homeEdge>0?'+':''}${homeEdge}` }],
-    mode: "recent",
-    confidence: 0.6
-  };
-}
-async function computeBlendedEdge({ homeCode, awayCode, awayPack, homePack }){
-  const recent = computeRecentEdgeFromLast10(awayPack, homePack);
-  if (!recent) return null;
-  const prior = await computePriorEdgeBDL(homeCode, awayCode);
-  const nH = (homePack?.games || []).length;
-  const nA = (awayPack?.games || []).length;
-  const nEff = Math.min(nH, nA);
-  const alpha = clamp01(
-    nEff >= 5 ? 0.80 :
-    nEff === 4 ? 0.70 :
-    nEff === 3 ? 0.55 :
-    nEff === 2 ? 0.40 :
-    nEff === 1 ? 0.25 : 0.00
-  );
-  const z = (1 - alpha) * logit(prior.pHome) + alpha * logit(recent.pHome);
-  const pHome = ilogit(z);
-  const factors = [...recent.factors, ...prior.factors];
-  return {
-    pHome,
-    factors,
-    mode: alpha >= 0.8 ? "recent" : "blend",
-    confidence: Math.max(0.25, alpha)
+    players: Array.isArray(body?.players) ? body.players : [],
+    _mode: body?._mode || "recent",
+    _season: body?._season,
   };
 }
 
@@ -610,123 +155,6 @@ function Last10List({ title, loading, error, data, note }){
   );
 }
 
-/* verdict using model first, else computed edge; now with score hydration support */
-function panelVerdict(game, edge){
-  const mv = modelVerdict(game);
-  if (mv) return mv;
-
-  const isFinal = (game?.status || '').toLowerCase().includes('final');
-  if (!isFinal || !edge || !Number.isFinite(edge.pHome)) return null;
-
-  const home = codeify(game?.home, 'HOME');
-  const away = codeify(game?.away, 'AWAY');
-  const predicted = edge.pHome > 0.5 ? home : away;
-  const actual = getActualWinnerCode(game);
-  if (!actual || actual === 'TIE') return null;
-
-  const pct = Math.round(edge.pHome * 100);
-  return {
-    state: actual === predicted ? 'correct' : 'incorrect',
-    tooltip: `Edge predicted ${predicted} (${pct}%), actual ${actual}`,
-    label: "Edge"
-  };
-}
-
-function ProbabilityCard({ game, edge, anchorISO }) {
-  const verdict = panelVerdict(game, edge);
-
-  const pModel = Number(game?.model?.pHome);
-  const hasModelProb = Number.isFinite(pModel);
-  const pFromEdge = Number(edge?.pHome);
-  const hasEdgeProb = Number.isFinite(pFromEdge);
-  const pHome = hasModelProb ? pModel : (hasEdgeProb ? pFromEdge : NaN);
-  const hasProb = Number.isFinite(pHome);
-  const pct = hasProb ? Math.round(pHome * 100) : null;
-
-  const homeCode = game?.home?.code;
-  const awayCode = game?.away?.code;
-
-  const modeHint = hasModelProb ? "model prob" : (edge?.mode || "recent");
-
-  // If neither model nor edge can render a probability, return a small info card
-  if (!hasProb) {
-    const reason = noDataReason(anchorISO);
-    return (
-      <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
-        <CardContent sx={{ p:2 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight:700, mb:0.5 }}>
-            Model edge
-          </Typography>
-          <Typography variant="body2" sx={{ color:'info.main' }}>
-            Unavailable — {reason}
-          </Typography>
-          {verdict && (
-            <Typography variant="caption" sx={{ display:'block', mt:0.5, color:'info.main' }}>
-              (Verdict available after finals; we’ll show whether the pick matched the result.)
-            </Typography>
-          )}
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return (
-    <Card variant="outlined" sx={{ borderRadius:1, mt:2 }}>
-      <CardContent sx={{ p:2 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
-          <Stack direction="row" alignItems="baseline" spacing={1}>
-            <Typography variant="subtitle2" sx={{ fontWeight:700 }}>
-              Model edge
-            </Typography>
-            <Typography variant="caption" sx={{ opacity:0.7 }}>(home win)</Typography>
-            <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>{modeHint}</Typography>
-            {Number.isFinite(edge?.confidence) && (
-              <Typography variant="caption" sx={{ opacity:0.6, ml:1 }}>
-                conf ~{Math.round(edge.confidence*100)}%
-              </Typography>
-            )}
-          </Stack>
-
-          {verdict && (verdict.state === 'correct'
-            ? (
-              <Tooltip title={verdict.tooltip}>
-                <Chip size="small" color="success" variant="outlined"
-                      icon={<CheckCircleIcon fontSize="small" />} label={verdict.label} />
-              </Tooltip>
-            ) : (
-              <Tooltip title={verdict.tooltip}>
-                <Chip size="small" color="error" variant="outlined"
-                      icon={<CancelIcon fontSize="small" />} label={verdict.label} />
-              </Tooltip>
-            )
-          )}
-        </Stack>
-
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt:1 }}>
-          <Typography variant="h5" sx={{ fontWeight:800 }}>{pct}%</Typography>
-          <Typography variant="body2" sx={{ opacity:0.75 }}>
-            {homeCode} vs {awayCode}
-          </Typography>
-        </Stack>
-        <Box sx={{ mt:1.25, height:8, bgcolor:'action.hover', borderRadius:1, overflow:'hidden' }}>
-          <Box sx={{ width: `${pct}%`, height:'100%', bgcolor:'primary.main' }} />
-        </Box>
-
-        {(edge?.factors?.length) ? (
-          <List dense sx={{ mt:1 }}>
-            {edge.factors.slice(0,4).map((f,i)=>(
-              <ListItem key={i} disableGutters sx={{ py:0.25 }}>
-                <ListItemText primaryTypographyProps={{ variant:'body2' }}
-                              primary={`${f.label}: ${f.value}`} />
-              </ListItem>
-            ))}
-          </List>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
 function formatWhenFromGame(game) {
   // Prefer the ISO with a real clock; fall back to dateKey-only
   if (game?._iso && game?.hasClock) {
@@ -748,7 +176,7 @@ function shortLiveStatusLabel(status = "") {
   const s = String(status);
   const m = s.match(/end of\s*(\d)/i);
   if (m) return `End Q${m[1]}`;
-  // Common labels from BDL: "In Progress", "Halftime", "Final", etc.
+  // Common live-status labels: "In Progress", "Halftime", "Final", etc.
   return s;
 }
 
@@ -848,14 +276,12 @@ export default function GameComparePanel({ game }) {
   const [mini, setMini] = useState({ loading: true, error: null, data: null });
   const [miniModeLabel, setMiniModeLabel] = useState("last 21 days");
 
-  const [edge, setEdge] = useState(null);
-
-  // hydrated game scores for verdict
+  // Hydrate missing final scores for the matchup summary.
   const [hydrated, setHydrated] = useState(null);
 
   const anchorISO = (game?._iso || "").slice(0,10) || (game?.dateKey || new Date().toISOString().slice(0,10));
 
-  // hydrate missing final scores once, so verdict can render
+  // Hydrate missing final scores once.
   useEffect(() => {
     let stop = false;
     (async () => {
@@ -867,7 +293,7 @@ export default function GameComparePanel({ game }) {
         return;
       }
       try {
-        const g = await fetchGameByIdBDL(game.id);
+        const g = await fetchGameByIdPublic(game.id);
         if (stop) return;
         // Only set if we actually got numbers
         if (Number.isFinite(g.homeScore) && Number.isFinite(g.awayScore)) {
@@ -886,7 +312,7 @@ export default function GameComparePanel({ game }) {
     return () => { stop = true; };
   }, [game?.id, game?.status, game?.homeScore, game?.awayScore]);
 
-  const gameForVerdict = hydrated || game;
+  const gameForDisplay = hydrated || game;
 
   // Add these derived flags right after your effects / before the return:
   const awayEmpty = !a.loading && !a.error && !(a.data?.games?.length);
@@ -900,8 +326,8 @@ export default function GameComparePanel({ game }) {
       setA({loading:true,error:null,data:null});
       setB({loading:true,error:null,data:null});
       const [Ares, Bres] = await Promise.all([
-        fetchTeamLast10UpToBDL(game.away.code, anchorISO),
-        fetchTeamLast10UpToBDL(game.home.code, anchorISO),
+        fetchTeamLast10UpToPublic(game.away.code, anchorISO),
+        fetchTeamLast10UpToPublic(game.home.code, anchorISO),
       ]);
       if (cancelled) return;
       setA({loading:false,error:null,data:Ares});
@@ -919,7 +345,7 @@ export default function GameComparePanel({ game }) {
     try{
       setH2h({loading:true,error:null,data:null});
       const { start, end } = seasonWindowUpTo(anchorISO);
-      const { aWins, bWins } = await fetchHeadToHeadBDL(game.home.code, game.away.code, { start, end });
+      const { aWins, bWins } = await fetchHeadToHeadPublic(game.home.code, game.away.code, { start, end });
       if (cancelled) return;
       setH2h({loading:false,error:null,data:{ aWins, bWins }});
     }catch(e){
@@ -937,8 +363,8 @@ export default function GameComparePanel({ game }) {
         try {
         setMini({ loading: true, error: null, data: null });
         const [awayPack, homePack] = await Promise.all([
-            fetchRecentPlayerAveragesBDL(game.away.code, { days: 21, anchorISO, topN: 3 }),
-            fetchRecentPlayerAveragesBDL(game.home.code, { days: 21, anchorISO, topN: 3 }),
+            fetchRecentPlayerAveragesPublic(game.away.code, { days: 21, anchorISO, topN: 3 }),
+            fetchRecentPlayerAveragesPublic(game.home.code, { days: 21, anchorISO, topN: 3 }),
         ]);
         if (cancelled) return;
 
@@ -964,26 +390,10 @@ export default function GameComparePanel({ game }) {
     return () => { cancelled = true; };
     }, [game?.home?.code, game?.away?.code, anchorISO]);
 
-  // compute the edge (blend prior + recent) when last-10 ready
-  useEffect(() => { let stop=false; (async()=>{
-    if (a.loading || b.loading || a.error || b.error || !a.data || !b.data) { setEdge(null); return; }
-    try {
-      const blended = await computeBlendedEdge({
-        homeCode: game?.home?.code,
-        awayCode: game?.away?.code,
-        awayPack: a.data,
-        homePack: b.data
-      });
-      if (!stop) setEdge(blended || computeRecentEdgeFromLast10(a.data, b.data));
-    } catch {
-      if (!stop) setEdge(computeRecentEdgeFromLast10(a.data, b.data));
-    }
-  })(); return ()=>{ stop=true; }; }, [a.loading, b.loading, a.error, b.error, a.data, b.data, game?.home?.code, game?.away?.code]);
-
   return (
     <Box sx={{ flex: 1, minHeight: 0 }}>
       {/* Narrative */}
-      <NarrativeBlock game={gameForVerdict} a={a} b={b} h2h={h2h} />
+      <NarrativeBlock game={gameForDisplay} a={a} b={b} h2h={h2h} />
 
       <Divider sx={{ my: 1 }} />
 
@@ -1003,8 +413,6 @@ export default function GameComparePanel({ game }) {
         Showing last 10 this season up to {anchorISO}
       </Typography>
 
-      {/* Probability (model/edge) */}
-      <ProbabilityCard game={gameForVerdict} edge={edge} anchorISO={anchorISO} />
 
         {/* H2H */}
         {h2h.loading ? (

@@ -423,6 +423,7 @@ function registerNewsRoute(app) {
 }
 
 // register routes/guards
+app.get("/api/nba-data", require("../api/nba-data"));
 registerNewsRoute(app);
 registerJsonApiGuards(app);
 
