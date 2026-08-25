@@ -378,9 +378,23 @@ async function handleAction(q) {
     const year = Number(q.year);
     const month = Number(q.month);
     if (!year || month < 1 || month > 12) throw new Error("Invalid year/month");
+
+    // July, August and September are offseason months in PIVT's NBA calendar.
+    // Return a normal empty response instead of calling an upstream provider.
+    // This keeps an upstream 403/rate-limit from being presented as a site error
+    // when there is intentionally no regular-season slate to load.
+    if (month >= 7 && month <= 9) {
+      return {
+        games: [],
+        offseason: true,
+        source: "PIVT offseason calendar",
+        keyRequired: false,
+      };
+    }
+
     const { start, end } = monthBounds(year, month);
     const games = (await scoreboard(start, end)).filter((g) => g.seasonStageId !== 3 && g.dateKey >= start && g.dateKey <= end);
-    return { games, source: "ESPN public JSON", keyRequired: false };
+    return { games, offseason: false, source: "ESPN public JSON", keyRequired: false };
   }
 
   if (action === "game") {

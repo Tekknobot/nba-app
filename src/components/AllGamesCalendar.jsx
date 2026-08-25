@@ -66,6 +66,13 @@ function scoreValue(v) {
 }
 
 async function fetchMonthSchedulePublic(year, monthIndex) {
+  // July-September are offseason months for the NBA calendar. Do not call an
+  // upstream schedule service for an intentionally empty month. This avoids
+  // showing a third-party 403 as though PIVT itself failed.
+  if (monthIndex >= 6 && monthIndex <= 8) {
+    return [];
+  }
+
   const params = new URLSearchParams({
     action: "month",
     year: String(year),
@@ -462,7 +469,7 @@ export default function AllGamesCalendar() {
                 </Box>
               )}
 
-              {loadErr && (
+              {loadErr && !viewedOffseason && (
                 <Typography variant="caption" sx={{ color: "warning.main", mt: 1.25, display: "block" }}>
                   Schedule source error: {loadErr}
                 </Typography>
@@ -478,7 +485,7 @@ export default function AllGamesCalendar() {
                 </Typography>
                 <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
                   {viewedOffseason
-                    ? "That empty calendar is expected—not a data failure. PIVT keeps news and historical matchup context available while the regular season is idle."
+                    ? "That empty calendar is expected, not a data failure. PIVT does not call the live schedule source during offseason months, so there is no upstream schedule error to surface."
                     : "The public schedule returned no games for this month. Use the month controls above to continue browsing."}
                 </Typography>
               </CardContent>

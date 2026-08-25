@@ -17,8 +17,9 @@ a { color: inherit; }
   place-items: center;
   border-radius: 0;
   color: #fff;
-  background: linear-gradient(145deg, #3b82f6, #245bd3);
+  background: #0a1220;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 8px 24px rgba(37,99,235,.22);
+  overflow: hidden;
 }
 .pivt-hero {
   position: relative;

@@ -2,7 +2,6 @@ import React from "react";
 import {
   AppBar, Toolbar, Button, Stack, Box, Typography, Chip
 } from "@mui/material";
-import SportsBasketballRoundedIcon from "@mui/icons-material/SportsBasketballRounded";
 import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import ArticleOutlinedIcon from "@mui/icons-material/ArticleOutlined";
 import { Link as RouterLink, useLocation } from "react-router-dom";
@@ -34,8 +33,8 @@ export default function Header() {
           sx={{ p: 0, mr: "auto", minWidth: 0, textTransform: "none", "&:hover": { background: "transparent" } }}
         >
           <Stack direction="row" spacing={1} alignItems="center">
-            <Box className="brand-mark">
-              <SportsBasketballRoundedIcon sx={{ fontSize: 19 }} />
+            <Box className="brand-mark" aria-hidden="true">
+              <Box component="img" src="/favicon.svg" alt="" sx={{ width: "100%", height: "100%", display: "block" }} />
             </Box>
             <Box sx={{ textAlign: "left" }}>
               <Typography sx={{ fontFamily: '"Bebas Neue", sans-serif', fontSize: { xs: 24, sm: 28 }, letterSpacing: 1.6, lineHeight: 0.9 }}>
