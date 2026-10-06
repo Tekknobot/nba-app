@@ -113,6 +113,11 @@ function PredictionBlock({ game, prediction }) {
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .65 }}>
         Last {sample.awayGames || 0} {game?.away?.code} games vs last {sample.homeGames || 0} {game?.home?.code} games{sample.playerStats ? ", plus available top-player production." : ". Player production was not available for this sample."}
       </Typography>
+      {(prediction?.rest?.away || prediction?.rest?.home) && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .35 }}>
+          Rest: {game?.away?.code} {prediction?.rest?.away?.backToBack ? "back-to-back" : Number.isFinite(prediction?.rest?.away?.daysOff) ? `${prediction.rest.away.daysOff} day${prediction.rest.away.daysOff === 1 ? "" : "s"} off` : "unknown"} · {game?.home?.code} {prediction?.rest?.home?.backToBack ? "back-to-back" : Number.isFinite(prediction?.rest?.home?.daysOff) ? `${prediction.rest.home.daysOff} day${prediction.rest.home.daysOff === 1 ? "" : "s"} off` : "unknown"}
+        </Typography>
+      )}
     </Box>
   );
 }

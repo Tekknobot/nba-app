@@ -3,8 +3,10 @@ const he = require("he");
 
 const ESPN_NEWS = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=24";
 const RSS_FEEDS = [
-  { source: "ESPN", url: "https://www.espn.com/espn/rss/nba/news" },
   { source: "CBS Sports", url: "https://www.cbssports.com/rss/headlines/nba/" },
+  { source: "Yahoo Sports", url: "https://sports.yahoo.com/nba/rss/" },
+  { source: "RotoWire", url: "https://www.rotowire.com/rss/news.php?sport=NBA" },
+  { source: "SB Nation", url: "https://www.sbnation.com/rss/nba/index.xml" },
 ];
 
 function detectInjury(text = "") {
@@ -88,14 +90,62 @@ async function fetchRss(feed) {
   }
 }
 
+function normalizeHeadline(v = "") {
+  return String(v || "")
+    .toLowerCase()
+    .replace(/&[^;]+;/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function dedupe(items) {
-  const seen = new Set();
+  const seenLinks = new Set();
+  const seenTitles = new Set();
   return items.filter((item) => {
-    const key = String(item.link || item.title).replace(/[?#].*$/, "").toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
+    const linkKey = String(item.link || "").replace(/[?#].*$/, "").toLowerCase();
+    const titleKey = normalizeHeadline(item.title);
+    if ((!linkKey && !titleKey) || (linkKey && seenLinks.has(linkKey)) || (titleKey && seenTitles.has(titleKey))) return false;
+    if (linkKey) seenLinks.add(linkKey);
+    if (titleKey) seenTitles.add(titleKey);
     return true;
   });
+}
+
+// Keep the news rail from turning into a single-publisher feed simply because
+// one outlet posts more frequently. The freshest item from each source gets a
+// pass before the second-freshest item from each source, and so on.
+function balanceSources(items, limit = 30) {
+  const groups = new Map();
+  for (const item of items) {
+    const source = item?.source || "Other";
+    if (!groups.has(source)) groups.set(source, []);
+    groups.get(source).push(item);
+  }
+  for (const rows of groups.values()) {
+    rows.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
+  }
+
+  const sourceOrder = Array.from(groups.keys()).sort((a, b) => {
+    const at = new Date(groups.get(a)?.[0]?.pubDate || 0).getTime();
+    const bt = new Date(groups.get(b)?.[0]?.pubDate || 0).getTime();
+    return bt - at;
+  });
+  const cursors = new Map(sourceOrder.map((source) => [source, 0]));
+  const out = [];
+  while (out.length < limit) {
+    let added = false;
+    for (const source of sourceOrder) {
+      const rows = groups.get(source) || [];
+      const index = cursors.get(source) || 0;
+      if (index >= rows.length) continue;
+      out.push(rows[index]);
+      cursors.set(source, index + 1);
+      added = true;
+      if (out.length >= limit) break;
+    }
+    if (!added) break;
+  }
+  return out;
 }
 
 module.exports = async function handler(req, res) {
@@ -107,11 +157,15 @@ module.exports = async function handler(req, res) {
       fetchJson(ESPN_NEWS).then((j) => (Array.isArray(j?.articles) ? j.articles.map(espnArticle) : [])).catch(() => []),
       ...RSS_FEEDS.map(fetchRss),
     ]);
-    const items = dedupe([...espn, ...rss.flat()])
-      .filter((x) => x.title && x.link)
-      .sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0))
-      .slice(0, 30);
-    return res.status(200).json({ items, sources: ["ESPN public news JSON", "ESPN RSS", "CBS Sports RSS"], keyRequired: false });
+    const merged = dedupe([...espn, ...rss.flat()])
+      .filter((x) => x.title && x.link);
+    const items = balanceSources(merged, 30);
+    return res.status(200).json({
+      items,
+      sources: ["ESPN public news JSON", "CBS Sports RSS", "Yahoo Sports RSS", "RotoWire RSS", "SB Nation RSS"],
+      keyRequired: false,
+      balanced: true,
+    });
   } catch (err) {
     return res.status(200).json({ items: [], error: "news_unavailable", detail: err?.message || String(err), keyRequired: false });
   }

@@ -179,23 +179,27 @@ async function scoreboard(start, end) {
     return (Array.isArray(j?.events) ? j.events : []).map(normalizeEvent).filter(Boolean);
   }
 
-  const cursor = new Date(`${startDate}T12:00:00Z`);
-  const last = new Date(`${endDate}T12:00:00Z`);
-  const days = [];
+  // Cross-month windows are fetched a month at a time instead of one HTTP
+  // request per day. This matters for PIVT 3 / form analysis windows and keeps
+  // the public upstream load modest.
+  const cursor = new Date(`${startDate.slice(0, 7)}-01T12:00:00Z`);
+  const last = new Date(`${endDate.slice(0, 7)}-01T12:00:00Z`);
+  const months = [];
   while (cursor <= last) {
-    days.push(cursor.toISOString().slice(0, 10));
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    months.push(`${cursor.getUTCFullYear()}${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
-  const batches = await Promise.all(days.map(async (day) => {
+  const batches = await Promise.all(months.map(async (month) => {
     const u = new URL(`${ESPN_SITE}/scoreboard`);
-    u.searchParams.set("dates", ymd(day));
-    u.searchParams.set("limit", "100");
+    u.searchParams.set("dates", month);
+    u.searchParams.set("limit", "1000");
     const j = await fetchJson(u, TTL.scoreboard);
     return (Array.isArray(j?.events) ? j.events : []).map(normalizeEvent).filter(Boolean);
   }));
 
   const seen = new Set();
   return batches.flat().filter((game) => {
+    if (!game?.dateKey || game.dateKey < startDate || game.dateKey > endDate) return false;
     const key = String(game?.id || `${game?.dateKey}-${game?.away?.code}-${game?.home?.code}`);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -266,6 +270,7 @@ function dedupeCompletedGames(games, teamCode, anchor, limit = 10) {
 function teamFormMetrics(games, teamCode) {
   const code = normCode(teamCode);
   let wins = 0, losses = 0, pointsFor = 0, pointsAgainst = 0, counted = 0;
+  const margins = [];
   for (const g of games || []) {
     const home = g?.home?.code === code;
     const my = Number(home ? g.homeScore : g.awayScore);
@@ -274,17 +279,39 @@ function teamFormMetrics(games, teamCode) {
     counted += 1;
     pointsFor += my;
     pointsAgainst += opp;
+    margins.push(my - opp);
     if (my > opp) wins += 1;
     else if (my < opp) losses += 1;
   }
   const gp = Math.max(1, counted);
+  const avgMargin = counted ? (pointsFor - pointsAgainst) / gp : 0;
+  const variance = margins.length > 1
+    ? margins.reduce((sum, margin) => sum + ((margin - avgMargin) ** 2), 0) / margins.length
+    : 0;
   return {
     games: counted, wins, losses,
     winPct: counted ? wins / counted : 0.5,
     avgPointsFor: counted ? pointsFor / gp : 0,
     avgPointsAgainst: counted ? pointsAgainst / gp : 0,
-    avgMargin: counted ? (pointsFor - pointsAgainst) / gp : 0,
+    avgMargin,
+    marginStdDev: Math.sqrt(variance),
   };
+}
+
+function daysBetween(a, b) {
+  const ad = new Date(`${dateOnly(a)}T12:00:00Z`);
+  const bd = new Date(`${dateOnly(b)}T12:00:00Z`);
+  if (Number.isNaN(ad.getTime()) || Number.isNaN(bd.getTime())) return null;
+  return Math.round((bd.getTime() - ad.getTime()) / 86400000);
+}
+
+function restProfile(games, anchor) {
+  const last = (games || []).find((g) => g?.completed && g?.dateKey);
+  if (!last || !anchor) return { daysOff: null, backToBack: false, lastGame: last?.dateKey || null };
+  const gap = daysBetween(last.dateKey, anchor);
+  if (!Number.isFinite(gap)) return { daysOff: null, backToBack: false, lastGame: last.dateKey };
+  const daysOff = Math.max(0, gap - 1);
+  return { daysOff, backToBack: gap === 1, lastGame: last.dateKey };
 }
 
 function playerImpact(players = []) {
@@ -426,7 +453,7 @@ function firstMapped(map, keys, fallback = 0) {
   return fallback;
 }
 
-async function seasonFallbackPlayers(teamCode, season, topN) {
+async function seasonAthleteRows(season) {
   const u = new URL(`${ESPN_WEB}/statistics/byathlete`);
   u.searchParams.set("region", "us");
   u.searchParams.set("lang", "en");
@@ -438,13 +465,15 @@ async function seasonFallbackPlayers(teamCode, season, topN) {
   u.searchParams.set("season", String(season));
   u.searchParams.set("seasontype", "2");
   const j = await fetchJson(u, TTL.stats);
+  return Array.isArray(j?.athletes) ? j.athletes : [];
+}
+
+function parseSeasonPlayers(rows, teamCode, topN) {
   const wanted = normCode(teamCode);
-  const rows = (Array.isArray(j?.athletes) ? j.athletes : []).filter((x) => {
+  const parsed = (rows || []).filter((x) => {
     const a = x?.athlete || {};
     return normCode(a?.teamShortName || a?.team?.abbreviation || a?.teamAbbreviation) === wanted;
-  });
-
-  const parsed = rows.map((x) => {
+  }).map((x) => {
     const a = x?.athlete || {};
     const stats = statPairsFromCategories(x?.categories || []);
     const min = firstMapped(stats, ["avgMinutes", "minutesPerGame", "minutes"], 0);
@@ -462,6 +491,11 @@ async function seasonFallbackPlayers(teamCode, season, topN) {
 
   parsed.sort((a, b) => minutesToNumber(b.min) - minutesToNumber(a.min) || b.pts - a.pts);
   return parsed.slice(0, topN);
+}
+
+async function seasonFallbackPlayers(teamCode, season, topN) {
+  const rows = await seasonAthleteRows(season);
+  return parseSeasonPlayers(rows, teamCode, topN);
 }
 
 async function getTopPlayers(teamCode, anchor, days = 21, topN = 3) {
@@ -513,16 +547,27 @@ async function recentTeamGames(teamCode, anchor, limit = 5) {
   return dedupeCompletedGames(schedules.flat(), team, safeAnchor, limit);
 }
 
-function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlayers, homePlayers) {
+function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlayers, homePlayers, anchor = "") {
   const away = teamFormMetrics(awayGames, awayCode);
   const home = teamFormMetrics(homeGames, homeCode);
   const awayImpact = playerImpact(awayPlayers);
   const homeImpact = playerImpact(homePlayers);
+  const awayRest = restProfile(awayGames, anchor);
+  const homeRest = restProfile(homeGames, anchor);
 
   const formRating = (m) => ((m.winPct - 0.5) * 18) + clamp(m.avgMargin, -15, 15) * 0.65;
   let homeEdge = formRating(home) - formRating(away) + 1.25;
   const hasPlayerStats = awayImpact !== null && homeImpact !== null;
   if (hasPlayerStats) homeEdge += clamp((homeImpact - awayImpact) / 7, -3, 3);
+
+  // Fatigue is deliberately a modest adjustment. It should break close ties,
+  // not overpower actual basketball form.
+  if (awayRest.backToBack && !homeRest.backToBack) homeEdge += 1.1;
+  else if (homeRest.backToBack && !awayRest.backToBack) homeEdge -= 1.1;
+  else if (Number.isFinite(awayRest.daysOff) && Number.isFinite(homeRest.daysOff)) {
+    const restGap = clamp(homeRest.daysOff - awayRest.daysOff, -2, 2);
+    homeEdge += restGap * 0.3;
+  }
 
   let homeProb = 100 / (1 + Math.exp(-homeEdge / 7));
   const minGames = Math.min(away.games, home.games);
@@ -531,7 +576,10 @@ function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlay
   const awayProb = 100 - homeProb;
   const pick = homeProb >= 50 ? normCode(homeCode) : normCode(awayCode);
   const pickProb = Math.max(homeProb, awayProb);
-  const confidence = minGames >= 5 && hasPlayerStats && pickProb >= 59 ? "medium" : "low";
+  const volatility = Math.max(away.marginStdDev || 0, home.marginStdDev || 0);
+  let confidence = "low";
+  if (minGames >= 5 && hasPlayerStats && pickProb >= 64 && volatility <= 16) confidence = "high";
+  else if (minGames >= 5 && pickProb >= 58 && volatility <= 20) confidence = "medium";
 
   const factors = [];
   const winDiff = home.winPct - away.winPct;
@@ -539,6 +587,7 @@ function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlay
   if (Math.abs(winDiff) >= 0.12) factors.push(`${winDiff > 0 ? normCode(homeCode) : normCode(awayCode)} has the stronger recent win rate`);
   if (Math.abs(marginDiff) >= 2.5) factors.push(`${marginDiff > 0 ? normCode(homeCode) : normCode(awayCode)} has the better recent scoring margin`);
   if (hasPlayerStats && Math.abs(homeImpact - awayImpact) >= 2.5) factors.push(`${homeImpact > awayImpact ? normCode(homeCode) : normCode(awayCode)} has the stronger top-player production sample`);
+  if (awayRest.backToBack !== homeRest.backToBack) factors.push(`${awayRest.backToBack ? normCode(homeCode) : normCode(awayCode)} has the rest advantage`);
   if (factors.length < 2) factors.push(`${normCode(homeCode)} receives a small home-court adjustment`);
 
   return {
@@ -548,10 +597,56 @@ function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlay
     confidence,
     sample: { awayGames: away.games, homeGames: home.games, playerStats: hasPlayerStats },
     form: { away, home },
+    rest: { away: awayRest, home: homeRest },
     playerImpact: { away: awayImpact, home: homeImpact },
-    factors: factors.slice(0, 3),
-    model: "Recent five-game form + scoring margin + top-player production + small home-court adjustment",
+    factors: factors.slice(0, 4),
+    model: "Recent five-game form + scoring margin + consistency + top-player production + rest/fatigue + small home-court adjustment",
   };
+}
+
+function recentGamesFromPool(pool, teamCode, anchor, limit = 5) {
+  return dedupeCompletedGames(pool || [], teamCode, anchor, limit);
+}
+
+async function topPicksForDate(date) {
+  const anchor = dateOnly(date);
+  if (!anchor) throw new Error("Invalid top-picks date");
+  const games = (await scoreboard(anchor, anchor))
+    .filter((g) => g.dateKey === anchor && !g.completed && g.state !== "in");
+  if (!games.length) return [];
+
+  const modelEnd = new Date(`${anchor}T12:00:00Z`);
+  modelEnd.setUTCDate(modelEnd.getUTCDate() - 1);
+  const historyEnd = modelEnd.toISOString().slice(0, 10);
+  const historyStartD = new Date(modelEnd);
+  historyStartD.setUTCDate(historyStartD.getUTCDate() - 27);
+  const historyStart = historyStartD.toISOString().slice(0, 10);
+  const history = (await scoreboard(historyStart, historyEnd)).filter((g) => g.completed);
+
+  const season = seasonEndYearFrom(anchor);
+  const [currentAthletes, previousAthletes] = await Promise.all([
+    seasonAthleteRows(season).catch(() => []),
+    seasonAthleteRows(season - 1).catch(() => []),
+  ]);
+  const playersFor = (teamCode) => {
+    const current = parseSeasonPlayers(currentAthletes, teamCode, 3);
+    return current.length ? current : parseSeasonPlayers(previousAthletes, teamCode, 3);
+  };
+
+  const ranked = games.map((game) => {
+    const awayGames = recentGamesFromPool(history, game.away?.code, historyEnd, 5);
+    const homeGames = recentGamesFromPool(history, game.home?.code, historyEnd, 5);
+    const awayPlayers = playersFor(game.away?.code);
+    const homePlayers = playersFor(game.home?.code);
+    const prediction = predictionFromInputs(game.away?.code, game.home?.code, awayGames, homeGames, awayPlayers, homePlayers, anchor);
+    const edge = Math.max(prediction.homeProbability, prediction.awayProbability) - 50;
+    const sample = Math.min(prediction.sample?.awayGames || 0, prediction.sample?.homeGames || 0);
+    const confidenceBonus = prediction.confidence === "high" ? 4 : prediction.confidence === "medium" ? 2 : 0;
+    const rankScore = edge + Math.min(5, sample) * 0.45 + confidenceBonus;
+    return { game, prediction, rankScore: Math.round(rankScore * 10) / 10 };
+  });
+
+  return ranked.sort((a, b) => b.rankScore - a.rankScore).slice(0, 3);
 }
 
 async function handleAction(q) {
@@ -636,10 +731,23 @@ async function handleAction(q) {
       getTopPlayers(away, modelAnchor, 21, 3),
       getTopPlayers(home, modelAnchor, 21, 3),
     ]);
-    const prediction = predictionFromInputs(away, home, awayGames, homeGames, awayPlayersData.players, homePlayersData.players);
+    const prediction = predictionFromInputs(away, home, awayGames, homeGames, awayPlayersData.players, homePlayersData.players, anchor);
     return {
       prediction,
       playerModes: { away: awayPlayersData._mode, home: homePlayersData._mode },
+      source: "PIVT model using ESPN public JSON (no key)",
+      sources: ["ESPN public site JSON"],
+      keyRequired: false,
+    };
+  }
+
+  if (action === "top-picks") {
+    const anchor = dateOnly(q.date) || new Date().toISOString().slice(0, 10);
+    const picks = await topPicksForDate(anchor);
+    return {
+      date: anchor,
+      picks,
+      model: "PIVT 3 ranks the strongest pre-game leans using recent form, scoring margin, consistency, player production, rest and home court.",
       source: "PIVT model using ESPN public JSON (no key)",
       sources: ["ESPN public site JSON"],
       keyRequired: false,

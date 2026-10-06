@@ -49,6 +49,78 @@ async function fetchMonth(year, monthIndex) {
   return Array.isArray(body?.games) ? body.games : [];
 }
 
+async function fetchTopPicks(date) {
+  const q = new URLSearchParams({ action: "top-picks", date });
+  const r = await fetch(`/api/nba-data?${q}`, { cache: "no-store" });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body?.detail || body?.error || `HTTP ${r.status}`);
+  return Array.isArray(body?.picks) ? body.picks : [];
+}
+
+function PivtThree({ date, onOpen }) {
+  const [state, setState] = useState({ loading: true, picks: [], error: "" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true, picks: [], error: "" });
+    fetchTopPicks(date)
+      .then((picks) => { if (!cancelled) setState({ loading: false, picks, error: "" }); })
+      .catch((e) => { if (!cancelled) setState({ loading: false, picks: [], error: e?.message || String(e) }); });
+    return () => { cancelled = true; };
+  }, [date]);
+
+  if (!state.loading && !state.picks.length) return null;
+
+  return (
+    <Box sx={{ mb: 2.25, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider", py: 1.5 }}>
+      <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 1 }}>
+        <Box>
+          <Typography variant="overline" color="text.secondary">PIVT 3</Typography>
+          <Typography sx={{ fontSize: 15, fontWeight: 800 }}>Strongest model leans</Typography>
+        </Box>
+        <Typography variant="caption" color="text.secondary">not betting odds</Typography>
+      </Stack>
+
+      {state.loading ? (
+        <Stack alignItems="center" sx={{ py: 2 }}><CircularProgress size={16} /></Stack>
+      ) : (
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(3,minmax(0,1fr))" }, gap: .75 }}>
+          {state.picks.map((row, index) => {
+            const game = row?.game || {};
+            const prediction = row?.prediction || {};
+            const pct = Math.max(Number(prediction?.awayProbability) || 50, Number(prediction?.homeProbability) || 50);
+            return (
+              <Box
+                key={game.id || `${game?.away?.code}-${game?.home?.code}-${index}`}
+                onClick={() => onOpen?.(game)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen?.(game); }}
+                sx={{ p: 1.1, border: "1px solid", borderColor: "divider", cursor: "pointer", minWidth: 0, "&:hover": { bgcolor: "#141414", borderColor: "#454545" } }}
+              >
+                <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
+                  <Typography variant="caption" color="text.secondary">#{index + 1} · {game?.away?.code} @ {game?.home?.code}</Typography>
+                  <Typography variant="caption" color="text.secondary">{prediction?.confidence || "low"}</Typography>
+                </Stack>
+                <Typography sx={{ fontSize: 18, fontWeight: 900, mt: .45 }}>{prediction?.pick || "—"} {pct}%</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .45, lineHeight: 1.35 }}>
+                  {(prediction?.factors || []).slice(0, 2).join(" · ") || "Recent form model"}
+                </Typography>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
+
+      {!state.loading && !state.error && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+          Ranked from recent form, scoring margin, consistency, top-player production, rest and home court. Low-confidence picks stay labeled low.
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 function TeamMark({ team, size = 34 }) {
   return (
     <Avatar src={logoForTeam(team)} alt="" sx={{ width: size, height: size, p: .4, bgcolor: "transparent", color: "text.secondary", fontSize: 10, "& img": { objectFit: "contain" } }}>
@@ -248,6 +320,9 @@ export default function AllGamesCalendar() {
 
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "minmax(0,1.65fr) minmax(300px,.75fr)" }, gap: { xs: 2.5, lg: 3 } }}>
         <Box>
+          {!loading && selectedGames.some((game) => !game?.completed && game?.state !== "in") && (
+            <PivtThree date={selectedKey} onOpen={setOpenGame} />
+          )}
           <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 1.2 }}>
             <Typography variant="overline" color="text.secondary">Games</Typography>
             <Typography variant="caption" color="text.secondary">{loading ? "Loading" : `${selectedGames.length} listed`}</Typography>
