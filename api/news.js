@@ -1,200 +1,118 @@
-// api/news.js
-// Vercel Serverless Function that returns NBA news as JSON.
-// No client changes needed: your React code can keep fetch("/api/news").
-
 const { XMLParser } = require("fast-xml-parser");
+const he = require("he");
 
-// --- tiny utils ---
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const ESPN_NEWS = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=24";
+const RSS_FEEDS = [
+  { source: "ESPN", url: "https://www.espn.com/espn/rss/nba/news" },
+  { source: "CBS Sports", url: "https://www.cbssports.com/rss/headlines/nba/" },
+];
 
-// --- DROP-IN (api/news.js): boundary-safe injury detector with negatives ---
-function detectInjury(text) {
-  if (!text) return { isInjury: false, hits: [] };
+function detectInjury(text = "") {
   const hay = String(text).toLowerCase();
-
-  // Block obvious non-injury jersey/throwback content
-  const NEGATIVES = [
-    /\bthrowback\b/i,
-    /\bbringing? back\b/i,
-    /\bcome(?:back|s back)\b/i,
-    /\bclassic (?:jersey|uniform|edition)\b/i,
-    /\b(?:jersey|uniform|kit|hardwood classic|court (?:design|reveal))\b/i,
-  ];
-  for (const n of NEGATIVES) {
-    if (n.test(hay)) return { isInjury: false, hits: ['NEGATIVE'] };
-  }
-
-  // Your curated terms
-  const terms = [
-    "injury", "injured", 
-    "out for season", "season-ending", "out indefinitely",
-    "day-to-day", "day to day", "game-time decision",
-    "ruled out", "will not play", "inactive", "sidelined",
-    "concussion protocol", "underwent surgery",
-    "mri", "x-ray", "xray",
-    "fracture", "broken",
-    "sprain", "sprained", "strain", "strained",
-    "soreness", "tightness",
-    "torn", "tear",
-    "acl", "mcl", "pcl", "lcl", "meniscus", "achilles",
-    "hamstring", "calf", "quad", "groin", "knee", "ankle",
-    "foot", "toe", "wrist", "hand", "thumb", "finger",
-    "elbow", "shoulder", "hip"
-  ];
-
-  // Build boundary-safe regex for each term:
-  // (^|\W)TERM($|\W) ensures no match inside longer words (e.g., "Philadelphia")
-  const patterns = terms.map((t) => {
-    const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(^|\\W)${esc}($|\\W)`, "i");
-  });
-
-  const hits = [];
-  for (const re of patterns) {
-    if (re.test(hay)) hits.push(re.source);
-  }
-
-  return { isInjury: hits.length > 0, hits };
+  const negatives = [/throwback/i, /jersey/i, /uniform/i, /hardwood classic/i];
+  if (negatives.some((re) => re.test(hay))) return false;
+  return /(injur|ruled out|will not play|inactive|sidelined|surgery|fracture|sprain|strain|soreness|tightness|torn|tear|acl|mcl|meniscus|achilles|hamstring|calf|quad|groin|knee|ankle|foot|wrist|hand|shoulder|hip|concussion)/i.test(hay);
 }
 
-async function fetchWithTimeout(url, ms, headers) {
+async function fetchJson(url, timeoutMs = 4500) {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), ms);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const r = await fetch(url, { headers, signal: controller.signal });
-    return r;
+    const r = await fetch(url, { headers: { Accept: "application/json", "User-Agent": "PIVT/3.0" }, signal: controller.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
   } finally {
-    clearTimeout(id);
+    clearTimeout(timer);
   }
 }
 
-async function fetchWithRetry(url, { headers = {}, timeoutMs = 3500, retries = 2, backoffMs = 300 } = {}) {
-  let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await fetchWithTimeout(url, timeoutMs, headers);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res;
-    } catch (e) {
-      lastErr = e;
-      if (attempt < retries) await sleep(backoffMs * Math.pow(2, attempt));
-    }
-  }
-  throw lastErr;
-}
-
-function pickImageFromItem(it) {
-  const media = Array.isArray(it?.["media:content"]) ? it["media:content"][0] : it?.["media:content"];
-  const thumb = Array.isArray(it?.["media:thumbnail"]) ? it["media:thumbnail"][0] : it?.["media:thumbnail"];
-  const enclosure = Array.isArray(it?.enclosure) ? it.enclosure[0] : it?.enclosure;
-  const candidates = [
-    media?.url, media?.href, thumb?.url, thumb?.href, enclosure?.url, enclosure?.href,
-    it?.image?.url, it?.image?.href, typeof it?.image === "string" ? it.image : "",
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) return candidate;
-  }
-  const html = String(it?.description || it?.["content:encoded"] || "");
-  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
-  return match?.[1] && /^https?:\/\//i.test(match[1]) ? match[1] : "";
-}
-
-async function fetchFeed(feed, parser, ua) {
+async function fetchText(url, timeoutMs = 4000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const r = await fetchWithRetry(feed.url, {
-      headers: { "User-Agent": ua },
-      timeoutMs: 3500,
-      retries: 2,
-      backoffMs: 300,
-    });
-    const xml = await r.text();
+    const r = await fetch(url, { headers: { Accept: "application/rss+xml,text/xml,*/*", "User-Agent": "PIVT/3.0" }, signal: controller.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-    let json;
-    try {
-      json = parser.parse(xml);
-    } catch (e) {
-      console.warn(`[news] ${feed.source} parse error: ${e?.message || e}`);
-      return [];
-    }
+function espnArticle(item) {
+  const link = item?.links?.web?.href || item?.links?.mobile?.href || "";
+  const image = item?.images?.find((x) => x?.url)?.url || "";
+  const title = he.decode(item?.headline || item?.title || "");
+  const desc = he.decode(item?.description || "");
+  return {
+    title,
+    link,
+    pubDate: item?.published || item?.lastModified || "",
+    source: "ESPN",
+    image,
+    isInjury: detectInjury(`${title} ${desc}`),
+  };
+}
 
-    const items = json?.rss?.channel?.item || [];
-    const arr = Array.isArray(items) ? items : [items];
+function pickRssImage(item) {
+  const media = Array.isArray(item?.["media:content"]) ? item["media:content"][0] : item?.["media:content"];
+  const thumb = Array.isArray(item?.["media:thumbnail"]) ? item["media:thumbnail"][0] : item?.["media:thumbnail"];
+  const enclosure = Array.isArray(item?.enclosure) ? item.enclosure[0] : item?.enclosure;
+  const choices = [media?.url, media?.href, thumb?.url, thumb?.href, enclosure?.url, enclosure?.href, item?.image?.url, item?.image?.href, typeof item?.image === "string" ? item.image : ""];
+  const direct = choices.find((x) => typeof x === "string" && /^https?:\/\//i.test(x));
+  if (direct) return direct;
+  const html = String(item?.description || item?.["content:encoded"] || "");
+  return html.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || "";
+}
 
-    // helper to decode HTML entities
-    const he = require("he");
-
-    return arr
-    .map((it) => {
-        const title = it?.title ? he.decode(it.title) : "";
-        const desc  = it?.description ? he.decode(String(it.description)) : "";
-        const { isInjury, hits } = detectInjury(`${title} ${desc}`); // check title+desc
-
-        return {
+async function fetchRss(feed) {
+  try {
+    const xml = await fetchText(feed.url);
+    const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
+    const doc = parser.parse(xml);
+    const raw = doc?.rss?.channel?.item || [];
+    const rows = Array.isArray(raw) ? raw : [raw];
+    return rows.map((item) => {
+      const title = he.decode(item?.title || "");
+      const desc = he.decode(String(item?.description || ""));
+      return {
         title,
-        link: it?.link || it?.guid || "",
-        pubDate: it?.pubDate || it?.published || it?.updated || "",
+        link: item?.link || item?.guid || "",
+        pubDate: item?.pubDate || item?.published || item?.updated || "",
         source: feed.source,
-        image: pickImageFromItem(it),
-        isInjury,
-        injuryHits: hits,
-        };
-    })
-    .filter((x) => x.title && x.link);
-
-  } catch (e) {
-    console.warn(`[news] ${feed.source} fetch error: ${e?.name || ""} ${e?.message || e}`);
+        image: pickRssImage(item),
+        isInjury: detectInjury(`${title} ${desc}`),
+      };
+    }).filter((x) => x.title && x.link);
+  } catch {
     return [];
   }
 }
 
+function dedupe(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = String(item.link || item.title).replace(/[?#].*$/, "").toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 module.exports = async function handler(req, res) {
-  // Only GET
-  if (req.method !== "GET") {
-    res.status(405).setHeader("Content-Type", "application/json; charset=utf-8");
-    return res.end(JSON.stringify({ items: [], error: "method_not_allowed" }));
-  }
-
-  // Always JSON
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300"); // CDNs can cache briefly
-
-  const NBA_FEEDS = [
-    { source: "ESPN", url: "https://www.espn.com/espn/rss/nba/news" },
-    { source: "Yahoo", url: "https://sports.yahoo.com/nba/rss.xml" },
-    { source: "CBS", url: "https://www.cbssports.com/rss/headlines/nba/" },
-  ];
-
-  const UA =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36";
-  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
-
-  // Overall time budget to avoid platform 504s
-  const overallTimeoutMs = 5500;
-  const overallTimeout = new Promise((resolve) =>
-    setTimeout(() => resolve({ __timeout: true }), overallTimeoutMs)
-  );
+  if (req.method !== "GET") return res.status(405).json({ items: [], error: "method_not_allowed" });
+  res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=900");
 
   try {
-    const work = (async () => {
-      const results = await Promise.all(NBA_FEEDS.map((f) => fetchFeed(f, parser, UA)));
-      const flat = results.flat();
-
-      if (!flat.length) {
-        // Return empty array, not a 5xx/HTML page
-        return { items: [] };
-      }
-
-      flat.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
-      return { items: flat.slice(0, 25) };
-    })();
-
-    const out = await Promise.race([work, overallTimeout]);
-    if (out && out.__timeout) {
-      return res.status(200).end(JSON.stringify({ items: [], error: "timeout" }));
-    }
-    return res.status(200).end(JSON.stringify(out));
-  } catch (e) {
-    console.error("NEWS ERR (outer):", e);
-    return res.status(200).end(JSON.stringify({ items: [], error: "route_error" }));
+    const [espn, ...rss] = await Promise.all([
+      fetchJson(ESPN_NEWS).then((j) => (Array.isArray(j?.articles) ? j.articles.map(espnArticle) : [])).catch(() => []),
+      ...RSS_FEEDS.map(fetchRss),
+    ]);
+    const items = dedupe([...espn, ...rss.flat()])
+      .filter((x) => x.title && x.link)
+      .sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0))
+      .slice(0, 30);
+    return res.status(200).json({ items, sources: ["ESPN public news JSON", "ESPN RSS", "CBS Sports RSS"], keyRequired: false });
+  } catch (err) {
+    return res.status(200).json({ items: [], error: "news_unavailable", detail: err?.message || String(err), keyRequired: false });
   }
 };

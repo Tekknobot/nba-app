@@ -1,74 +1,21 @@
 import React from "react";
-import {
-  AppBar, Toolbar, Button, Stack, Box, Typography, Chip
-} from "@mui/material";
-import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
-import ArticleOutlinedIcon from "@mui/icons-material/ArticleOutlined";
+import { AppBar, Box, Button, Stack, Toolbar, Typography } from "@mui/material";
 import { Link as RouterLink, useLocation } from "react-router-dom";
 
 export default function Header() {
   const { pathname } = useLocation();
-  const isAll = pathname === "/" || pathname.startsWith("/all") || pathname.startsWith("/game/");
-  const isBlog = pathname.startsWith("/blog");
+  const onGames = pathname === "/" || pathname.startsWith("/all") || pathname.startsWith("/game/");
+  const onBlog = pathname.startsWith("/blog");
 
   return (
-    <AppBar
-      position="sticky"
-      color="transparent"
-      elevation={0}
-      sx={{
-        top: 0,
-        zIndex: (t) => t.zIndex.appBar,
-        backgroundColor: "rgba(8, 13, 22, 0.88)",
-        backdropFilter: "blur(18px)",
-        borderBottom: "1px solid",
-        borderColor: "divider",
-      }}
-    >
-      <Toolbar sx={{ minHeight: { xs: 58, sm: 64 }, px: { xs: 1.5, sm: 3 }, maxWidth: 1400, width: "100%", mx: "auto" }}>
-        <Button
-          component={RouterLink}
-          to="/all"
-          color="inherit"
-          sx={{ p: 0, mr: "auto", minWidth: 0, textTransform: "none", "&:hover": { background: "transparent" } }}
-        >
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Box className="brand-mark" aria-hidden="true">
-              <Box component="img" src="/favicon.svg" alt="" sx={{ width: "100%", height: "100%", display: "block" }} />
-            </Box>
-            <Box sx={{ textAlign: "left" }}>
-              <Typography sx={{ fontFamily: '"Bebas Neue", sans-serif', fontSize: { xs: 24, sm: 28 }, letterSpacing: 1.6, lineHeight: 0.9 }}>
-                PIVT
-              </Typography>
-              <Typography variant="caption" sx={{ color: "text.secondary", display: { xs: "none", sm: "block" }, lineHeight: 1.1, mt: 0.3 }}>
-                NBA schedule & form
-              </Typography>
-            </Box>
-          </Stack>
-        </Button>
-
-        <Stack direction="row" spacing={0.5} alignItems="center">
-          <Button
-            component={RouterLink}
-            to="/all"
-            startIcon={<CalendarMonthRoundedIcon />}
-            variant={isAll ? "contained" : "text"}
-            size="small"
-            sx={{ minWidth: { xs: 44, sm: 92 }, px: { xs: 1, sm: 1.5 }, ".MuiButton-startIcon": { mr: { xs: 0, sm: 0.75 } } }}
-          >
-            <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>Games</Box>
-          </Button>
-          <Button
-            component={RouterLink}
-            to="/blog"
-            startIcon={<ArticleOutlinedIcon />}
-            variant={isBlog ? "contained" : "text"}
-            size="small"
-            sx={{ minWidth: { xs: 44, sm: 86 }, px: { xs: 1, sm: 1.5 }, ".MuiButton-startIcon": { mr: { xs: 0, sm: 0.75 } } }}
-          >
-            <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>Blog</Box>
-          </Button>
-          <Chip label="No login" size="small" variant="outlined" sx={{ display: { xs: "none", md: "inline-flex" }, ml: 0.5 }} />
+    <AppBar position="sticky" elevation={0} color="transparent" sx={{ borderBottom: "1px solid", borderColor: "divider", bgcolor: "rgba(10,10,10,.92)", backdropFilter: "blur(14px)" }}>
+      <Toolbar sx={{ minHeight: { xs: 54, sm: 60 }, maxWidth: 1280, width: "100%", mx: "auto", px: { xs: 2, sm: 3 } }}>
+        <Typography component={RouterLink} to="/all" sx={{ textDecoration: "none", color: "text.primary", fontSize: 21, fontWeight: 900, letterSpacing: ".14em", mr: "auto" }}>
+          PIVT
+        </Typography>
+        <Stack direction="row" spacing={0.5}>
+          <Button component={RouterLink} to="/all" color="inherit" size="small" sx={{ color: onGames ? "text.primary" : "text.secondary", bgcolor: onGames ? "action.selected" : "transparent" }}>Games</Button>
+          <Button component={RouterLink} to="/blog" color="inherit" size="small" sx={{ color: onBlog ? "text.primary" : "text.secondary", bgcolor: onBlog ? "action.selected" : "transparent" }}>Notes</Button>
         </Stack>
       </Toolbar>
     </AppBar>

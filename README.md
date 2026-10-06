@@ -1,29 +1,28 @@
-# PIVT — NBA Calendar & Matchup Helper
+# PIVT
 
-A responsive desktop-and-mobile NBA schedule, scores, recent-form, and league-news dashboard.
+A minimal NBA schedule, scores, matchup context, player snapshot, and league-news app.
 
-Browse games by date, compare each team’s last 10 completed regular-season games, review the current season series, and see compact player stat snapshots.
+## Data sources
 
+PIVT requires no API key and no paid sports-data subscription.
 
-## 2026 redesign
+- Schedule, scores, game summaries, team form, season series, player box-score data and headshots: ESPN public site JSON endpoints.
+- League headlines and story thumbnails: ESPN public news JSON plus ESPN and CBS Sports RSS feeds.
+- Team marks: source-provided ESPN team assets with text fallbacks.
 
-- Desktop two-column dashboard with a larger game workspace and league-news sidebar
-- Mobile-first date rail and full-width matchup drawer
-- Explicit offseason status; as of August 2026 the site notes that the league is between regular seasons
-- ESPN-provided team logos with code fallbacks
-- Player headshots and RSS story images when public source data supplies them
-- About, Privacy, and Contact pages/routes removed
+All third-party data is fetched server-side through `/api/nba-data` and `/api/news`, so the React client has one normalized interface.
 
-## Data
+## Local development
 
-PIVT no longer requires Balldontlie or any API key. The browser talks to the project’s own `/api/nba-data` route, which normalizes keyless public NBA data into the shapes used by the existing UI.
+The archive intentionally omits `node_modules`.
 
-Supported data actions:
+```bash
+npm install
+npm run dev
+```
 
-- Monthly schedule, status, and scores
-- Single-game detail
-- Team last-10 results
-- Head-to-head season series
-- Recent player box-score averages with a season-stat fallback
+The Express API runs on port 5001 and Create React App runs on its normal development port. In Vercel production, the files in `/api` provide the serverless routes.
 
-For local development, `npm run dev` starts the Express API on port 5001 and the CRA frontend. In production, the top-level `api/nba-data.js` file runs as the serverless route.
+## Design
+
+The current UI is intentionally restrained: text-only PIVT branding, neutral dark palette, square geometry, compact schedule cards, image-led news rows, and a focused matchup drawer.

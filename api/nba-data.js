@@ -295,11 +295,13 @@ function aggregatePlayers(gamesPlayers, topN) {
       p.rebSum += Number(row.reb) || 0;
       p.astSum += Number(row.ast) || 0;
       if (row.player) p.player = row.player;
+      if (row.image) p.image = row.image;
     }
   }
   return Array.from(by.values()).map((p) => ({
     player_id: p.player_id,
     player: p.player,
+    image: p.image || "",
     min: minutesString(p.minSum / Math.max(1, p.gp)),
     pts: p.ptsSum / Math.max(1, p.gp),
     reb: p.rebSum / Math.max(1, p.gp),
@@ -394,25 +396,37 @@ async function handleAction(q) {
 
     const { start, end } = monthBounds(year, month);
     const games = (await scoreboard(start, end)).filter((g) => g.seasonStageId !== 3 && g.dateKey >= start && g.dateKey <= end);
-    return { games, offseason: false, source: "ESPN public JSON", keyRequired: false };
+    return { games, offseason: false, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
   }
 
   if (action === "game") {
     const summary = await gameSummary(q.id);
     const game = gameFromSummary(summary, q.id);
-    return { game, source: "ESPN public JSON", keyRequired: false };
+    return { game, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
   }
 
   if (action === "team-last10") {
     const team = normCode(q.team);
     const anchor = dateOnly(q.anchor) || new Date().toISOString().slice(0, 10);
     const season = seasonEndYearFrom(anchor);
-    const games = (await teamSchedule(team, season, 2))
-      .filter((g) => g.completed && g.dateKey && g.dateKey <= anchor)
+    const [regular, preseason, previous] = await Promise.all([
+      teamSchedule(team, season, 2).catch(() => []),
+      teamSchedule(team, season, 1).catch(() => []),
+      teamSchedule(team, season - 1, 2).catch(() => []),
+    ]);
+    const seen = new Set();
+    const games = [...regular, ...preseason, ...previous]
+      .filter((g) => {
+        if (!g?.completed || !g?.dateKey || g.dateKey > anchor) return false;
+        const key = String(g.id || `${g.dateKey}-${g.away?.code}-${g.home?.code}`);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .sort((a, b) => String(b._iso).localeCompare(String(a._iso)))
       .slice(0, 10)
       .map((g) => resultRow(g, team));
-    return { team, games, source: "ESPN public JSON", keyRequired: false };
+    return { team, games, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
   }
 
   if (action === "h2h") {
@@ -434,7 +448,7 @@ async function handleAction(q) {
       if (aScore > bScore) aWins += 1;
       else if (bScore > aScore) bWins += 1;
     }
-    return { aWins, bWins, source: "ESPN public JSON", keyRequired: false };
+    return { aWins, bWins, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
   }
 
   if (action === "top-players") {
@@ -462,7 +476,7 @@ async function handleAction(q) {
         catch { return []; }
       }));
       const players = aggregatePlayers(boxes, topN);
-      if (players.length) return { players, _mode: "recent", source: "ESPN public JSON", keyRequired: false };
+      if (players.length) return { players, _mode: "recent", source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
     }
 
     let players = await seasonFallbackPlayers(team, season, topN).catch(() => []);
@@ -471,7 +485,7 @@ async function handleAction(q) {
       players = await seasonFallbackPlayers(team, season - 1, topN).catch(() => []);
       usedSeason = season - 1;
     }
-    return { players, _mode: "season-fallback", _season: usedSeason, source: "ESPN public JSON", keyRequired: false };
+    return { players, _mode: "season-fallback", _season: usedSeason, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
   }
 
   throw new Error("Unknown action");
