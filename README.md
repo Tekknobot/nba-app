@@ -58,5 +58,8 @@ The UI is intentionally restrained: text-only PIVT branding, neutral dark palett
 
 PIVT now keeps an immutable local history of PIVT 3 slates. When a current or future slate is first shown, the original three picks, model percentages, confidence labels, and model notes are frozen in browser storage. The `/record` screen later checks NBA results and marks each pick WIN, MISS, or OPEN, with overall pick accuracy, W-L record, and completed 3/3 sweeps.
 
-Historical prediction data is intentionally not back-filled after a selected game has started. This keeps the track record pre-game and prevents later model changes from rewriting earlier picks. Because this project has no database, the record is stored per browser/device in `localStorage`.
+Historical prediction data is intentionally not back-filled after a selected game has started. This keeps the track record pre-game and prevents later model changes from rewriting earlier picks. The record is stored in the browser-native PIVT IndexedDB database and existing localStorage records are migrated automatically.
 
+
+### PIVT 3 record database
+PIVT 3 history uses the browser's native IndexedDB database (`pivt`, store `pivt3_slates`). No Vercel storage resource, environment variable, API key, or external database account is required. Existing `pivt3-history-v1` localStorage history is migrated automatically on first load. The database is browser/device-local by design.

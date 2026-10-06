@@ -69,7 +69,7 @@ function PivtThree({ date, onOpen }) {
       .then((picks) => {
         if (cancelled) return;
         setState({ loading: false, picks, error: "" });
-        if (picks.length) recordPivt3Slate(date, picks);
+        if (picks.length) recordPivt3Slate(date, picks).catch(() => {});
       })
       .catch((e) => { if (!cancelled) setState({ loading: false, picks: [], error: e?.message || String(e) }); });
     return () => { cancelled = true; };

@@ -3,7 +3,7 @@ import { Avatar, Box, CircularProgress, Divider, Stack, Typography } from "@mui/
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
-import { easternDateKey, loadPivtHistory, recordPivt3Slate, resultForGame, updatePivt3Results } from "../utils/pivtHistory";
+import { easternDateKey, getPivtDbInfo, loadPivtHistory, recordPivt3Slate, resultForGame, updatePivt3Results } from "../utils/pivtHistory";
 import { logoForTeam } from "../utils/teamAssets";
 
 
@@ -86,16 +86,17 @@ function slateSummary(slate) {
 }
 
 export default function PivtRecord() {
-  const [state, setState] = React.useState({ loading: true, verifying: false, error: "", history: [] });
+  const [state, setState] = React.useState({ loading: true, verifying: false, error: "", history: [], dbInfo: null });
 
   const verify = React.useCallback(async () => {
-    let history = loadPivtHistory();
-    setState((s) => ({ ...s, history, loading: false, verifying: true, error: "" }));
+    let history = await loadPivtHistory();
+    const dbInfo = await getPivtDbInfo().catch(() => null);
+    setState((s) => ({ ...s, history, dbInfo, loading: false, verifying: true, error: "" }));
     try {
       const today = easternDateKey();
       if (!history.some((row) => row?.date === today)) {
         const picks = await fetchTopPicks(today).catch(() => []);
-        if (picks.length) history = recordPivt3Slate(today, picks);
+        if (picks.length) history = await recordPivt3Slate(today, picks);
       }
       if (!history.length) {
         setState((s) => ({ ...s, verifying: false }));
@@ -111,8 +112,9 @@ export default function PivtRecord() {
       batches.flat().forEach((game) => {
         if (game?.id) resultMap[String(game.id)] = resultForGame(game);
       });
-      const next = updatePivt3Results(resultMap);
-      setState({ loading: false, verifying: false, error: "", history: next });
+      const next = await updatePivt3Results(resultMap);
+      const dbInfo = await getPivtDbInfo().catch(() => null);
+      setState({ loading: false, verifying: false, error: "", history: next, dbInfo });
     } catch (e) {
       setState((s) => ({ ...s, verifying: false, error: e?.message || String(e) }));
     }
@@ -120,12 +122,14 @@ export default function PivtRecord() {
 
   React.useEffect(() => {
     verify();
-    const refresh = () => setState((s) => ({ ...s, history: loadPivtHistory() }));
+    const refresh = async () => {
+      const history = await loadPivtHistory();
+      const dbInfo = await getPivtDbInfo().catch(() => null);
+      setState((s) => ({ ...s, history, dbInfo }));
+    };
     window.addEventListener("pivt3-history-change", refresh);
-    window.addEventListener("storage", refresh);
     return () => {
       window.removeEventListener("pivt3-history-change", refresh);
-      window.removeEventListener("storage", refresh);
     };
   }, [verify]);
 
@@ -173,7 +177,7 @@ export default function PivtRecord() {
         <Box sx={{ py: 8, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
           <Typography sx={{ fontWeight: 800 }}>No PIVT 3 slates recorded yet.</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: .5, maxWidth: 560 }}>
-            PIVT will start the record automatically when a current or future PIVT 3 slate appears in this browser. Past dates are never back-filled after results are known.
+            PIVT will start the record automatically when a current or future PIVT 3 slate appears. Existing browser history is migrated into the PIVT database automatically. Past dates are never back-filled after results are known.
           </Typography>
         </Box>
       ) : (
@@ -198,7 +202,7 @@ export default function PivtRecord() {
       )}
 
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2.5, lineHeight: 1.55 }}>
-        Record storage is local to this browser/device because PIVT currently has no database. Clearing browser storage also clears this local record.
+        {state.dbInfo?.available ? `PIVT database: ${state.dbInfo.engine} · ${state.dbInfo.slates ?? history.length} slates stored. No Vercel configuration or API keys required.` : "PIVT database unavailable in this browser."}
       </Typography>
     </Box>
   );
