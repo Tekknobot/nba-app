@@ -63,3 +63,7 @@ Historical prediction data is intentionally not back-filled after a selected gam
 
 ### PIVT 3 record database
 PIVT 3 history uses the browser's native IndexedDB database (`pivt`, store `pivt3_slates`). No Vercel storage resource, environment variable, API key, or external database account is required. Existing `pivt3-history-v1` localStorage history is migrated automatically on first load. The database is browser/device-local by design.
+
+## Bookmark / browser icon handling
+
+PIVT uses uniquely named bookmark-facing favicon assets so desktop and mobile browsers do not reuse older cached artwork. Conventional fallback paths (`/favicon.ico`, `/apple-touch-icon.png`, Android/Windows aliases) mirror the same black-square P icon. `vercel.json` asks Vercel to revalidate the fallback icon and manifest metadata.
