@@ -92,10 +92,10 @@ function PivtThree({ date, onOpen }) {
             return (
               <Box
                 key={game.id || `${game?.away?.code}-${game?.home?.code}-${index}`}
-                onClick={() => onOpen?.(game)}
+                onClick={() => onOpen?.({ ...game, _pivtPrediction: prediction })}
                 role="button"
                 tabIndex={0}
-                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen?.(game); }}
+                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen?.({ ...game, _pivtPrediction: prediction }); }}
                 sx={{ p: 1.1, border: "1px solid", borderColor: "divider", cursor: "pointer", minWidth: 0, "&:hover": { bgcolor: "#141414", borderColor: "#454545" } }}
               >
                 <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>

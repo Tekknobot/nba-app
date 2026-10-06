@@ -604,6 +604,38 @@ function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlay
   };
 }
 
+async function predictionForMatchup(awayCode, homeCode, anchorInput) {
+  const away = normCode(awayCode);
+  const home = normCode(homeCode);
+  const anchor = dateOnly(anchorInput) || new Date().toISOString().slice(0, 10);
+  if (!TEAM_ID[away] || !TEAM_ID[home]) throw new Error("Invalid prediction matchup");
+
+  // Use the day before tipoff as the data cutoff so every PIVT surface uses
+  // exactly the same completed-game/player sample for a scheduled matchup.
+  const cutoff = new Date(`${anchor}T12:00:00Z`);
+  cutoff.setUTCDate(cutoff.getUTCDate() - 1);
+  const modelAnchor = cutoff.toISOString().slice(0, 10);
+
+  const [awayGames, homeGames, awayPlayersData, homePlayersData] = await Promise.all([
+    recentTeamGames(away, modelAnchor, 5),
+    recentTeamGames(home, modelAnchor, 5),
+    getTopPlayers(away, modelAnchor, 21, 3),
+    getTopPlayers(home, modelAnchor, 21, 3),
+  ]);
+
+  return {
+    prediction: predictionFromInputs(away, home, awayGames, homeGames, awayPlayersData.players, homePlayersData.players, anchor),
+    playerModes: { away: awayPlayersData._mode, home: homePlayersData._mode },
+  };
+}
+
+function predictionRankScore(prediction) {
+  const edge = Math.max(Number(prediction?.homeProbability) || 50, Number(prediction?.awayProbability) || 50) - 50;
+  const sample = Math.min(Number(prediction?.sample?.awayGames) || 0, Number(prediction?.sample?.homeGames) || 0);
+  const confidenceBonus = prediction?.confidence === "high" ? 4 : prediction?.confidence === "medium" ? 2 : 0;
+  return Math.round((edge + Math.min(5, sample) * 0.45 + confidenceBonus) * 10) / 10;
+}
+
 function recentGamesFromPool(pool, teamCode, anchor, limit = 5) {
   return dedupeCompletedGames(pool || [], teamCode, anchor, limit);
 }
@@ -633,20 +665,30 @@ async function topPicksForDate(date) {
     return current.length ? current : parseSeasonPlayers(previousAthletes, teamCode, 3);
   };
 
+  // Fast pass across the whole slate, then re-run the strongest candidates
+  // through the exact same canonical predictor used by the matchup drawer.
+  // This keeps PIVT 3 responsive while guaranteeing its displayed percentage
+  // is the same percentage the user sees after opening that matchup.
   const ranked = games.map((game) => {
     const awayGames = recentGamesFromPool(history, game.away?.code, historyEnd, 5);
     const homeGames = recentGamesFromPool(history, game.home?.code, historyEnd, 5);
     const awayPlayers = playersFor(game.away?.code);
     const homePlayers = playersFor(game.home?.code);
     const prediction = predictionFromInputs(game.away?.code, game.home?.code, awayGames, homeGames, awayPlayers, homePlayers, anchor);
-    const edge = Math.max(prediction.homeProbability, prediction.awayProbability) - 50;
-    const sample = Math.min(prediction.sample?.awayGames || 0, prediction.sample?.homeGames || 0);
-    const confidenceBonus = prediction.confidence === "high" ? 4 : prediction.confidence === "medium" ? 2 : 0;
-    const rankScore = edge + Math.min(5, sample) * 0.45 + confidenceBonus;
-    return { game, prediction, rankScore: Math.round(rankScore * 10) / 10 };
-  });
+    return { game, prediction, rankScore: predictionRankScore(prediction) };
+  }).sort((a, b) => b.rankScore - a.rankScore);
 
-  return ranked.sort((a, b) => b.rankScore - a.rankScore).slice(0, 3);
+  const shortlist = ranked.slice(0, Math.min(5, ranked.length));
+  const canonical = await Promise.all(shortlist.map(async (row) => {
+    try {
+      const exact = await predictionForMatchup(row.game.away?.code, row.game.home?.code, anchor);
+      return { ...row, prediction: exact.prediction, rankScore: predictionRankScore(exact.prediction) };
+    } catch {
+      return row;
+    }
+  }));
+
+  return canonical.sort((a, b) => b.rankScore - a.rankScore).slice(0, 3);
 }
 
 async function handleAction(q) {
@@ -720,21 +762,10 @@ async function handleAction(q) {
     const away = normCode(q.away);
     const home = normCode(q.home);
     const anchor = dateOnly(q.anchor) || new Date().toISOString().slice(0, 10);
-    if (!TEAM_ID[away] || !TEAM_ID[home]) throw new Error("Invalid prediction matchup");
-
-    const cutoff = new Date(`${anchor}T12:00:00Z`);
-    cutoff.setUTCDate(cutoff.getUTCDate() - 1);
-    const modelAnchor = cutoff.toISOString().slice(0, 10);
-    const [awayGames, homeGames, awayPlayersData, homePlayersData] = await Promise.all([
-      recentTeamGames(away, modelAnchor, 5),
-      recentTeamGames(home, modelAnchor, 5),
-      getTopPlayers(away, modelAnchor, 21, 3),
-      getTopPlayers(home, modelAnchor, 21, 3),
-    ]);
-    const prediction = predictionFromInputs(away, home, awayGames, homeGames, awayPlayersData.players, homePlayersData.players, anchor);
+    const exact = await predictionForMatchup(away, home, anchor);
     return {
-      prediction,
-      playerModes: { away: awayPlayersData._mode, home: homePlayersData._mode },
+      prediction: exact.prediction,
+      playerModes: exact.playerModes,
       source: "PIVT model using ESPN public JSON (no key)",
       sources: ["ESPN public site JSON"],
       keyRequired: false,

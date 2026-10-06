@@ -138,7 +138,11 @@ export default function GameComparePanel({ game }) {
       api({ action: "top-players", team: game.away.code, anchor, days: "21", topN: "3" }),
       api({ action: "top-players", team: game.home.code, anchor, days: "21", topN: "3" }),
       api({ action: "h2h", a: game.away.code, b: game.home.code, start: seasonStart(anchor), end: anchor }),
-      pregame ? api({ action: "prediction", away: game.away.code, home: game.home.code, anchor }).catch(() => ({ prediction: null })) : Promise.resolve({ prediction: null }),
+      pregame
+        ? (game?._pivtPrediction
+          ? Promise.resolve({ prediction: game._pivtPrediction })
+          : api({ action: "prediction", away: game.away.code, home: game.home.code, anchor }).catch(() => ({ prediction: null })))
+        : Promise.resolve({ prediction: null }),
     ]).then(([awayForm, homeForm, awayPlayers, homePlayers, h2h, prediction]) => {
       if (cancelled) return;
       setState({
@@ -158,7 +162,7 @@ export default function GameComparePanel({ game }) {
     });
 
     return () => { cancelled = true; };
-  }, [game?.away?.code, game?.home?.code, anchor, pregame]);
+  }, [game?.away?.code, game?.home?.code, game?._pivtPrediction, anchor, pregame]);
 
   const liveOrFinal = /final|in progress|halftime|quarter|q\d/i.test(String(game?.status || ""));
   const awayScore = Number.isFinite(Number(game?.awayScore)) ? Number(game.awayScore) : null;
