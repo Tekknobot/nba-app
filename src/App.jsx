@@ -16,7 +16,8 @@ export default function App() {
           <Route path="/" element={<Navigate to="/all" replace />} />
           <Route path="/all" element={<AllGamesCalendar />} />
           <Route path="/game/:id" element={<GamePage />} />
-          <Route path="/blog" element={<Blog />} />
+          <Route path="/pulse" element={<Blog />} />
+          <Route path="/blog" element={<Navigate to="/pulse" replace />} />
           <Route path="*" element={<Navigate to="/all" replace />} />
         </Routes>
       </Box>

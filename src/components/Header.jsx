@@ -5,7 +5,7 @@ import { Link as RouterLink, useLocation } from "react-router-dom";
 export default function Header() {
   const { pathname } = useLocation();
   const onGames = pathname === "/" || pathname.startsWith("/all") || pathname.startsWith("/game/");
-  const onBlog = pathname.startsWith("/blog");
+  const onBlog = pathname.startsWith("/pulse") || pathname.startsWith("/blog");
 
   return (
     <AppBar position="sticky" elevation={0} color="transparent" sx={{ borderBottom: "1px solid", borderColor: "divider", bgcolor: "rgba(10,10,10,.92)", backdropFilter: "blur(14px)" }}>
@@ -15,7 +15,7 @@ export default function Header() {
         </Typography>
         <Stack direction="row" spacing={0.5}>
           <Button component={RouterLink} to="/all" color="inherit" size="small" sx={{ color: onGames ? "text.primary" : "text.secondary", bgcolor: onGames ? "action.selected" : "transparent" }}>Games</Button>
-          <Button component={RouterLink} to="/blog" color="inherit" size="small" sx={{ color: onBlog ? "text.primary" : "text.secondary", bgcolor: onBlog ? "action.selected" : "transparent" }}>Notes</Button>
+          <Button component={RouterLink} to="/pulse" color="inherit" size="small" sx={{ color: onBlog ? "text.primary" : "text.secondary", bgcolor: onBlog ? "action.selected" : "transparent" }}>Pulse</Button>
         </Stack>
       </Toolbar>
     </AppBar>

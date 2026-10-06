@@ -240,8 +240,62 @@ function resultRow(game, teamCode) {
     homeAway: isHome ? "Home" : "Away",
     result: my > oppScore ? "W" : my < oppScore ? "L" : "T",
     score: `${game.away?.code} ${game.awayScore} - ${game.home?.code} ${game.homeScore}`,
+    pointsFor: Number.isFinite(my) ? my : null,
+    pointsAgainst: Number.isFinite(oppScore) ? oppScore : null,
+    margin: Number.isFinite(my) && Number.isFinite(oppScore) ? my - oppScore : null,
+    seasonStageId: game?.seasonStageId || 2,
   };
 }
+
+function dedupeCompletedGames(games, teamCode, anchor, limit = 10) {
+  const code = normCode(teamCode);
+  const seen = new Set();
+  return (games || [])
+    .filter((g) => {
+      if (!g?.completed || !g?.dateKey || (anchor && g.dateKey > anchor)) return false;
+      if (g?.home?.code !== code && g?.away?.code !== code) return false;
+      const key = String(g.id || `${g.dateKey}-${g.away?.code}-${g.home?.code}`);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => String(b._iso).localeCompare(String(a._iso)))
+    .slice(0, limit);
+}
+
+function teamFormMetrics(games, teamCode) {
+  const code = normCode(teamCode);
+  let wins = 0, losses = 0, pointsFor = 0, pointsAgainst = 0, counted = 0;
+  for (const g of games || []) {
+    const home = g?.home?.code === code;
+    const my = Number(home ? g.homeScore : g.awayScore);
+    const opp = Number(home ? g.awayScore : g.homeScore);
+    if (!Number.isFinite(my) || !Number.isFinite(opp)) continue;
+    counted += 1;
+    pointsFor += my;
+    pointsAgainst += opp;
+    if (my > opp) wins += 1;
+    else if (my < opp) losses += 1;
+  }
+  const gp = Math.max(1, counted);
+  return {
+    games: counted, wins, losses,
+    winPct: counted ? wins / counted : 0.5,
+    avgPointsFor: counted ? pointsFor / gp : 0,
+    avgPointsAgainst: counted ? pointsAgainst / gp : 0,
+    avgMargin: counted ? (pointsFor - pointsAgainst) / gp : 0,
+  };
+}
+
+function playerImpact(players = []) {
+  if (!players.length) return null;
+  const values = players.map((p) =>
+    (Number(p?.pts) || 0) + 0.55 * (Number(p?.reb) || 0) + 0.7 * (Number(p?.ast) || 0)
+  );
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function playerNameParts(athlete = {}) {
   let first = athlete.firstName || "";
@@ -410,6 +464,96 @@ async function seasonFallbackPlayers(teamCode, season, topN) {
   return parsed.slice(0, topN);
 }
 
+async function getTopPlayers(teamCode, anchor, days = 21, topN = 3) {
+  const team = normCode(teamCode);
+  const safeAnchor = dateOnly(anchor) || new Date().toISOString().slice(0, 10);
+  const safeDays = Math.max(1, Math.min(45, Number(days) || 21));
+  const safeTopN = Math.max(1, Math.min(5, Number(topN) || 3));
+  const season = seasonEndYearFrom(safeAnchor);
+  const startD = new Date(`${safeAnchor}T12:00:00Z`);
+  startD.setUTCDate(startD.getUTCDate() - safeDays);
+  const start = startD.toISOString().slice(0, 10);
+
+  const [regular, preseason] = await Promise.all([
+    teamSchedule(team, season, 2).catch(() => []),
+    teamSchedule(team, season, 1).catch(() => []),
+  ]);
+  const recentGames = dedupeCompletedGames([...regular, ...preseason], team, safeAnchor, 10)
+    .filter((g) => g.dateKey >= start);
+
+  if (recentGames.length) {
+    const boxes = await Promise.all(recentGames.map(async (g) => {
+      try { return playersFromSummary(await gameSummary(g.id), team); }
+      catch { return []; }
+    }));
+    const players = aggregatePlayers(boxes, safeTopN);
+    if (players.length) return { players, _mode: "recent", _season: season, _sampleGames: recentGames.length };
+  }
+
+  let players = await seasonFallbackPlayers(team, season, safeTopN).catch(() => []);
+  let usedSeason = season;
+  if (!players.length) {
+    players = await seasonFallbackPlayers(team, season - 1, safeTopN).catch(() => []);
+    usedSeason = season - 1;
+  }
+  return { players, _mode: "season-fallback", _season: usedSeason, _sampleGames: 0 };
+}
+
+async function recentTeamGames(teamCode, anchor, limit = 5) {
+  const team = normCode(teamCode);
+  const safeAnchor = dateOnly(anchor) || new Date().toISOString().slice(0, 10);
+  const season = seasonEndYearFrom(safeAnchor);
+  const schedules = await Promise.all([
+    teamSchedule(team, season, 1).catch(() => []),
+    teamSchedule(team, season, 2).catch(() => []),
+    teamSchedule(team, season, 3).catch(() => []),
+    teamSchedule(team, season - 1, 2).catch(() => []),
+    teamSchedule(team, season - 1, 3).catch(() => []),
+  ]);
+  return dedupeCompletedGames(schedules.flat(), team, safeAnchor, limit);
+}
+
+function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlayers, homePlayers) {
+  const away = teamFormMetrics(awayGames, awayCode);
+  const home = teamFormMetrics(homeGames, homeCode);
+  const awayImpact = playerImpact(awayPlayers);
+  const homeImpact = playerImpact(homePlayers);
+
+  const formRating = (m) => ((m.winPct - 0.5) * 18) + clamp(m.avgMargin, -15, 15) * 0.65;
+  let homeEdge = formRating(home) - formRating(away) + 1.25;
+  const hasPlayerStats = awayImpact !== null && homeImpact !== null;
+  if (hasPlayerStats) homeEdge += clamp((homeImpact - awayImpact) / 7, -3, 3);
+
+  let homeProb = 100 / (1 + Math.exp(-homeEdge / 7));
+  const minGames = Math.min(away.games, home.games);
+  if (minGames < 3) homeProb = clamp(homeProb, 40, 60);
+  else homeProb = clamp(homeProb, 30, 70);
+  const awayProb = 100 - homeProb;
+  const pick = homeProb >= 50 ? normCode(homeCode) : normCode(awayCode);
+  const pickProb = Math.max(homeProb, awayProb);
+  const confidence = minGames >= 5 && hasPlayerStats && pickProb >= 59 ? "medium" : "low";
+
+  const factors = [];
+  const winDiff = home.winPct - away.winPct;
+  const marginDiff = home.avgMargin - away.avgMargin;
+  if (Math.abs(winDiff) >= 0.12) factors.push(`${winDiff > 0 ? normCode(homeCode) : normCode(awayCode)} has the stronger recent win rate`);
+  if (Math.abs(marginDiff) >= 2.5) factors.push(`${marginDiff > 0 ? normCode(homeCode) : normCode(awayCode)} has the better recent scoring margin`);
+  if (hasPlayerStats && Math.abs(homeImpact - awayImpact) >= 2.5) factors.push(`${homeImpact > awayImpact ? normCode(homeCode) : normCode(awayCode)} has the stronger top-player production sample`);
+  if (factors.length < 2) factors.push(`${normCode(homeCode)} receives a small home-court adjustment`);
+
+  return {
+    pick,
+    homeProbability: Math.round(homeProb),
+    awayProbability: Math.round(awayProb),
+    confidence,
+    sample: { awayGames: away.games, homeGames: home.games, playerStats: hasPlayerStats },
+    form: { away, home },
+    playerImpact: { away: awayImpact, home: homeImpact },
+    factors: factors.slice(0, 3),
+    model: "Recent five-game form + scoring margin + top-player production + small home-court adjustment",
+  };
+}
+
 async function handleAction(q) {
   const action = String(q.action || "");
 
@@ -438,23 +582,7 @@ async function handleAction(q) {
     const team = normCode(q.team);
     const anchor = dateOnly(q.anchor) || new Date().toISOString().slice(0, 10);
     const season = seasonEndYearFrom(anchor);
-    const [regular, preseason, previous] = await Promise.all([
-      teamSchedule(team, season, 2).catch(() => []),
-      teamSchedule(team, season, 1).catch(() => []),
-      teamSchedule(team, season - 1, 2).catch(() => []),
-    ]);
-    const seen = new Set();
-    const games = [...regular, ...preseason, ...previous]
-      .filter((g) => {
-        if (!g?.completed || !g?.dateKey || g.dateKey > anchor) return false;
-        const key = String(g.id || `${g.dateKey}-${g.away?.code}-${g.home?.code}`);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((a, b) => String(b._iso).localeCompare(String(a._iso)))
-      .slice(0, 10)
-      .map((g) => resultRow(g, team));
+    const games = (await recentTeamGames(team, anchor, 10)).map((g) => resultRow(g, team));
     return { team, games, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
   }
 
@@ -462,11 +590,17 @@ async function handleAction(q) {
     const a = normCode(q.a), b = normCode(q.b);
     const start = dateOnly(q.start), end = dateOnly(q.end);
     const season = seasonEndYearFrom(end || start);
-    const games = (await teamSchedule(a, season, 2)).filter((g) => {
+    const stageSchedules = await Promise.all([1, 2, 3].map((stage) => teamSchedule(a, season, stage).catch(() => [])));
+    const seen = new Set();
+    const games = stageSchedules.flat().filter((g) => {
       if (!g.completed) return false;
       if (start && g.dateKey < start) return false;
       if (end && g.dateKey > end) return false;
-      return g.home?.code === b || g.away?.code === b;
+      if (g.home?.code !== b && g.away?.code !== b) return false;
+      const key = String(g.id || `${g.dateKey}-${g.away?.code}-${g.home?.code}`);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
     let aWins = 0, bWins = 0;
     for (const g of games) {
@@ -483,38 +617,55 @@ async function handleAction(q) {
   if (action === "top-players") {
     const team = normCode(q.team);
     const anchor = dateOnly(q.anchor) || new Date().toISOString().slice(0, 10);
-    const days = Math.max(1, Math.min(45, Number(q.days) || 21));
-    const topN = Math.max(1, Math.min(5, Number(q.topN) || 3));
-    const season = seasonEndYearFrom(anchor);
-    const startD = new Date(`${anchor}T12:00:00Z`);
-    startD.setUTCDate(startD.getUTCDate() - days);
-    const start = startD.toISOString().slice(0, 10);
+    const data = await getTopPlayers(team, anchor, q.days, q.topN);
+    return { ...data, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
+  }
 
-    const [regular, preseason] = await Promise.all([
-      teamSchedule(team, season, 2).catch(() => []),
-      teamSchedule(team, season, 1).catch(() => []),
+  if (action === "prediction") {
+    const away = normCode(q.away);
+    const home = normCode(q.home);
+    const anchor = dateOnly(q.anchor) || new Date().toISOString().slice(0, 10);
+    if (!TEAM_ID[away] || !TEAM_ID[home]) throw new Error("Invalid prediction matchup");
+
+    const cutoff = new Date(`${anchor}T12:00:00Z`);
+    cutoff.setUTCDate(cutoff.getUTCDate() - 1);
+    const modelAnchor = cutoff.toISOString().slice(0, 10);
+    const [awayGames, homeGames, awayPlayersData, homePlayersData] = await Promise.all([
+      recentTeamGames(away, modelAnchor, 5),
+      recentTeamGames(home, modelAnchor, 5),
+      getTopPlayers(away, modelAnchor, 21, 3),
+      getTopPlayers(home, modelAnchor, 21, 3),
     ]);
-    const recentGames = [...regular, ...preseason]
-      .filter((g) => g.completed && g.dateKey >= start && g.dateKey <= anchor)
-      .sort((a, b) => String(b._iso).localeCompare(String(a._iso)))
-      .slice(0, 10);
+    const prediction = predictionFromInputs(away, home, awayGames, homeGames, awayPlayersData.players, homePlayersData.players);
+    return {
+      prediction,
+      playerModes: { away: awayPlayersData._mode, home: homePlayersData._mode },
+      source: "PIVT model using ESPN public JSON (no key)",
+      sources: ["ESPN public site JSON"],
+      keyRequired: false,
+    };
+  }
 
-    if (recentGames.length) {
-      const boxes = await Promise.all(recentGames.map(async (g) => {
-        try { return playersFromSummary(await gameSummary(g.id), team); }
-        catch { return []; }
-      }));
-      const players = aggregatePlayers(boxes, topN);
-      if (players.length) return { players, _mode: "recent", source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
-    }
-
-    let players = await seasonFallbackPlayers(team, season, topN).catch(() => []);
-    let usedSeason = season;
-    if (!players.length) {
-      players = await seasonFallbackPlayers(team, season - 1, topN).catch(() => []);
-      usedSeason = season - 1;
-    }
-    return { players, _mode: "season-fallback", _season: usedSeason, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
+  if (action === "pulse") {
+    const anchor = dateOnly(q.date) || new Date().toISOString().slice(0, 10);
+    const a = new Date(`${anchor}T12:00:00Z`);
+    const startD = new Date(a); startD.setUTCDate(startD.getUTCDate() - 4);
+    const endD = new Date(a); endD.setUTCDate(endD.getUTCDate() + 10);
+    const start = startD.toISOString().slice(0, 10);
+    const end = endD.toISOString().slice(0, 10);
+    const all = (await scoreboard(start, end))
+      .filter((g) => g.dateKey >= start && g.dateKey <= end)
+      .sort((x, y) => String(x._iso).localeCompare(String(y._iso)));
+    const today = all.filter((g) => g.dateKey === anchor);
+    const recent = all.filter((g) => g.completed && g.dateKey < anchor).sort((x, y) => String(y._iso).localeCompare(String(x._iso))).slice(0, 6);
+    const future = all.filter((g) => g.dateKey > anchor);
+    const nextDate = future[0]?.dateKey || null;
+    const next = nextDate ? future.filter((g) => g.dateKey === nextDate) : [];
+    const stages = [...new Set([...today, ...next].map((g) => g.seasonStageId).filter(Boolean))];
+    return {
+      date: anchor, today, recent, nextDate, next, stages,
+      source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false,
+    };
   }
 
   throw new Error("Unknown action");

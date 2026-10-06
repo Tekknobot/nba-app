@@ -74,9 +74,53 @@ function TeamSection({ team, form, players, playersMode }) {
   );
 }
 
+function PredictionBlock({ game, prediction }) {
+  if (!prediction) return null;
+  const awayPct = Number(prediction.awayProbability) || 50;
+  const homePct = Number(prediction.homeProbability) || 50;
+  const pickName = prediction.pick === game?.home?.code ? game?.home?.name : game?.away?.name;
+  const sample = prediction.sample || {};
+  return (
+    <Box sx={{ borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider", py: 1.5, my: 1.5 }}>
+      <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={2}>
+        <Box>
+          <Typography variant="overline" color="text.secondary">PIVT prediction</Typography>
+          <Typography sx={{ fontSize: 18, fontWeight: 850, mt: .15 }}>{prediction.pick} lean</Typography>
+        </Box>
+        <Box sx={{ textAlign: "right" }}>
+          <Typography sx={{ fontSize: 22, fontWeight: 850 }}>{Math.max(awayPct, homePct)}%</Typography>
+          <Typography variant="caption" color="text.secondary">{prediction.confidence || "low"} confidence</Typography>
+        </Box>
+      </Stack>
+
+      <Box sx={{ mt: 1.25 }}>
+        <Stack direction="row" justifyContent="space-between" sx={{ mb: .5 }}>
+          <Typography variant="caption" color="text.secondary">{game?.away?.code} {awayPct}%</Typography>
+          <Typography variant="caption" color="text.secondary">{game?.home?.code} {homePct}%</Typography>
+        </Stack>
+        <Box sx={{ height: 5, bgcolor: "#242424", display: "flex", overflow: "hidden" }}>
+          <Box sx={{ width: `${awayPct}%`, bgcolor: "#777" }} />
+          <Box sx={{ width: `${homePct}%`, bgcolor: "#e7e7e7" }} />
+        </Box>
+      </Box>
+
+      <Typography variant="body2" sx={{ mt: 1.2 }}>Model pick: <strong>{pickName}</strong></Typography>
+      {!!prediction.factors?.length && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .65, lineHeight: 1.55 }}>
+          {prediction.factors.join(" · ")}
+        </Typography>
+      )}
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .65 }}>
+        Last {sample.awayGames || 0} {game?.away?.code} games vs last {sample.homeGames || 0} {game?.home?.code} games{sample.playerStats ? ", plus available top-player production." : ". Player production was not available for this sample."}
+      </Typography>
+    </Box>
+  );
+}
+
 export default function GameComparePanel({ game }) {
   const anchor = (game?._iso || game?.dateKey || new Date().toISOString()).slice(0, 10);
-  const [state, setState] = useState({ loading: true, error: "", awayForm: [], homeForm: [], awayPlayers: [], homePlayers: [], awayMode: "", homeMode: "", h2h: null });
+  const pregame = !/final|in progress|halftime|quarter|q\d|end of/i.test(String(game?.status || ""));
+  const [state, setState] = useState({ loading: true, error: "", awayForm: [], homeForm: [], awayPlayers: [], homePlayers: [], awayMode: "", homeMode: "", h2h: null, prediction: null });
 
   useEffect(() => {
     if (!game?.away?.code || !game?.home?.code) return;
@@ -89,7 +133,8 @@ export default function GameComparePanel({ game }) {
       api({ action: "top-players", team: game.away.code, anchor, days: "21", topN: "3" }),
       api({ action: "top-players", team: game.home.code, anchor, days: "21", topN: "3" }),
       api({ action: "h2h", a: game.away.code, b: game.home.code, start: seasonStart(anchor), end: anchor }),
-    ]).then(([awayForm, homeForm, awayPlayers, homePlayers, h2h]) => {
+      pregame ? api({ action: "prediction", away: game.away.code, home: game.home.code, anchor }).catch(() => ({ prediction: null })) : Promise.resolve({ prediction: null }),
+    ]).then(([awayForm, homeForm, awayPlayers, homePlayers, h2h, prediction]) => {
       if (cancelled) return;
       setState({
         loading: false,
@@ -101,13 +146,14 @@ export default function GameComparePanel({ game }) {
         awayMode: awayPlayers?._mode || "",
         homeMode: homePlayers?._mode || "",
         h2h: { away: h2h?.aWins || 0, home: h2h?.bWins || 0 },
+        prediction: prediction?.prediction || null,
       });
     }).catch((e) => {
       if (!cancelled) setState((s) => ({ ...s, loading: false, error: e?.message || String(e) }));
     });
 
     return () => { cancelled = true; };
-  }, [game?.away?.code, game?.home?.code, anchor]);
+  }, [game?.away?.code, game?.home?.code, anchor, pregame]);
 
   const liveOrFinal = /final|in progress|halftime|quarter|q\d/i.test(String(game?.status || ""));
   const awayScore = Number.isFinite(Number(game?.awayScore)) ? Number(game.awayScore) : null;
@@ -128,6 +174,7 @@ export default function GameComparePanel({ game }) {
         {state.h2h && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .75 }}>Season series: {game?.away?.code} {state.h2h.away}–{state.h2h.home} {game?.home?.code}</Typography>}
       </Box>
 
+      {!state.loading && !state.error && pregame && <PredictionBlock game={game} prediction={state.prediction} />}
       <Divider sx={{ my: 1.5 }} />
       {state.loading ? <Stack alignItems="center" sx={{ py: 8 }}><CircularProgress size={18} /></Stack> : state.error ? (
         <Typography variant="body2" color="text.secondary">Matchup detail unavailable.</Typography>
@@ -138,7 +185,7 @@ export default function GameComparePanel({ game }) {
         </Box>
       )}
       <Divider sx={{ my: 1.5 }} />
-      <Typography variant="caption" color="text.secondary">Stats and results: free ESPN public feeds. Images are supplied by the source when available.</Typography>
+      <Typography variant="caption" color="text.secondary">Stats and results: free ESPN public feeds. PIVT predictions are heuristic estimates, not betting odds. Images are supplied by the source when available.</Typography>
     </Box>
   );
 }
