@@ -33,13 +33,20 @@ function confidenceLabel(v) {
   return String(v || "low").toUpperCase();
 }
 
+function confidenceColor(v) {
+  const value = String(v || "low").toLowerCase();
+  if (value === "high") return "success.main";
+  if (value === "low") return "warning.main";
+  return "text.secondary";
+}
+
 function pickPercent(pick) {
   return pick?.pick === pick?.home?.code ? Number(pick?.homeProbability) || 50 : Number(pick?.awayProbability) || 50;
 }
 
 function PickStatus({ correct, pending }) {
   if (pending) return (
-    <Box sx={{ width: 26, height: 26, border: "1px solid", borderColor: "divider", display: "grid", placeItems: "center", color: "text.secondary", flex: "0 0 auto" }}>
+    <Box sx={{ width: 26, height: 26, border: "1px solid", borderColor: "warning.main", display: "grid", placeItems: "center", color: "warning.main", flex: "0 0 auto" }}>
       <RemoveRoundedIcon sx={{ fontSize: 16 }} />
     </Box>
   );
@@ -66,12 +73,15 @@ function PickRow({ pick }) {
       <Avatar src={logoForTeam(pickedTeam)} alt="" sx={{ width: 32, height: 32, p: .35, bgcolor: "transparent", "& img": { objectFit: "contain" } }}>{pick.pick}</Avatar>
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Stack direction="row" spacing={.8} alignItems="baseline" sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 850, fontSize: 14 }}>{pick.pick} {pct}%</Typography>
+          <Typography sx={{ fontWeight: 850, fontSize: 14, color: resolved ? (correct ? "success.main" : "error.main") : "text.primary" }}>{pick.pick} {pct}%</Typography>
           <Typography variant="caption" color="text.secondary" noWrap>{pick.away?.code} @ {pick.home?.code}</Typography>
         </Stack>
-        <Typography variant="caption" color="text.secondary">{confidenceLabel(pick.confidence)} confidence · {finalText}</Typography>
+        <Typography variant="caption" color="text.secondary">
+          <Box component="span" sx={{ color: confidenceColor(pick.confidence), fontWeight: 800 }}>{confidenceLabel(pick.confidence)} confidence</Box>
+          {" · "}{finalText}
+        </Typography>
       </Box>
-      <Typography variant="caption" sx={{ color: resolved ? (correct ? "success.main" : "error.main") : "text.secondary", fontWeight: 850, letterSpacing: ".05em" }}>
+      <Typography variant="caption" sx={{ color: resolved ? (correct ? "success.main" : "error.main") : "warning.main", fontWeight: 850, letterSpacing: ".05em" }}>
         {resolved ? (correct ? "WIN" : "MISS") : "OPEN"}
       </Typography>
     </Stack>
@@ -103,7 +113,12 @@ export default function PivtRecord() {
         return;
       }
 
-      const months = Array.from(new Set(history.map((row) => String(row.date || "").slice(0, 7)).filter(Boolean)));
+      const months = Array.from(new Set(
+        history
+          .filter((row) => (row.picks || []).some((pick) => !pick?.result?.completed))
+          .map((row) => String(row.date || "").slice(0, 7))
+          .filter(Boolean)
+      ));
       const batches = await Promise.all(months.map(async (key) => {
         const [year, month] = key.split("-").map(Number);
         return fetchMonth(year, month);
@@ -128,8 +143,12 @@ export default function PivtRecord() {
       setState((s) => ({ ...s, history, dbInfo }));
     };
     window.addEventListener("pivt3-history-change", refresh);
+    const interval = window.setInterval(() => {
+      if (typeof document === "undefined" || !document.hidden) verify();
+    }, 60000);
     return () => {
       window.removeEventListener("pivt3-history-change", refresh);
+      window.clearInterval(interval);
     };
   }, [verify]);
 
@@ -159,13 +178,13 @@ export default function PivtRecord() {
 
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "repeat(2,minmax(0,1fr))", sm: "repeat(4,minmax(0,1fr))" }, borderTop: "1px solid", borderLeft: "1px solid", borderColor: "divider", mb: 3 }}>
         {[
-          [accuracy === null ? "—" : `${accuracy}%`, "Pick accuracy"],
-          [`${wins}-${misses}`, "Pick record"],
-          [`${sweeps}/${completedSlates.length}`, "3/3 sweeps"],
-          [String(history.length), "Slates recorded"],
-        ].map(([value, label]) => (
+          [accuracy === null ? "—" : `${accuracy}%`, "Pick accuracy", accuracy === null ? "text.primary" : accuracy >= 60 ? "success.main" : accuracy >= 50 ? "warning.main" : "error.main"],
+          [`${wins}-${misses}`, "Pick record", resolved.length ? (wins > misses ? "success.main" : wins === misses ? "warning.main" : "error.main") : "text.primary"],
+          [`${sweeps}/${completedSlates.length}`, "3/3 sweeps", sweeps > 0 ? "success.main" : "text.primary"],
+          [String(history.length), "Slates recorded", "text.primary"],
+        ].map(([value, label, tone]) => (
           <Box key={label} sx={{ p: 1.5, borderRight: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
-            <Typography sx={{ fontSize: { xs: 22, sm: 26 }, fontWeight: 900, fontVariantNumeric: "tabular-nums" }}>{value}</Typography>
+            <Typography sx={{ fontSize: { xs: 22, sm: 26 }, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: tone }}>{value}</Typography>
             <Typography variant="caption" color="text.secondary">{label}</Typography>
           </Box>
         ))}
@@ -192,7 +211,7 @@ export default function PivtRecord() {
                     <Typography sx={{ fontWeight: 850 }}>{prettyDate(slate.date)}</Typography>
                     <Typography variant="caption" color="text.secondary">Recorded {new Date(slate.recordedAt).toLocaleString()}</Typography>
                   </Box>
-                  <Typography sx={{ fontSize: 13, fontWeight: 900, letterSpacing: ".05em", color: summary.complete && summary.wins === summary.total ? "success.main" : "text.secondary", whiteSpace: "nowrap" }}>{label}</Typography>
+                  <Typography sx={{ fontSize: 13, fontWeight: 900, letterSpacing: ".05em", color: !summary.complete ? "warning.main" : summary.wins === summary.total ? "success.main" : summary.wins >= 2 ? "warning.main" : "error.main", whiteSpace: "nowrap" }}>{label}</Typography>
                 </Stack>
                 {(slate.picks || []).map((pick, i) => <PickRow key={pick.gameId || `${slate.date}-${i}`} pick={pick} />)}
               </Box>

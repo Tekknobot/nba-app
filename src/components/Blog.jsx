@@ -19,31 +19,47 @@ async function loadPulse(date) {
   return body;
 }
 
-function MiniTeam({ team, score }) {
+function isFinal(game) { return Boolean(game?.completed) || /final/i.test(String(game?.status || "")); }
+function isLive(game) { return /in progress|halftime|quarter|q\d|end of/i.test(String(game?.status || "")); }
+
+function MiniTeam({ team, score, winner, loser }) {
+  const tone = winner ? "success.main" : loser ? "error.main" : "text.primary";
   return (
     <Stack direction="row" alignItems="center" spacing={.8} sx={{ minWidth: 0 }}>
       <Avatar src={logoForTeam(team)} alt="" sx={{ width: 28, height: 28, p: .3, bgcolor: "transparent", "& img": { objectFit: "contain" } }}>{team?.code}</Avatar>
-      <Typography variant="body2" sx={{ flex: 1, minWidth: 0, fontWeight: 700 }} noWrap>{team?.code}</Typography>
-      {Number.isFinite(Number(score)) && <Typography variant="body2" sx={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{score}</Typography>}
+      <Typography variant="body2" sx={{ flex: 1, minWidth: 0, fontWeight: winner ? 850 : 700, color: tone }} noWrap>{team?.code}</Typography>
+      {Number.isFinite(Number(score)) && <Typography variant="body2" sx={{ fontWeight: winner ? 900 : 800, color: tone, fontVariantNumeric: "tabular-nums" }}>{score}</Typography>}
     </Stack>
   );
 }
 
-function PulseGame({ game, final = false }) {
-  const time = final ? "FINAL" : (game?._iso ? formatGameLabel(game._iso, { mode: "ET", withTZ: true }) : (game?.status || "Scheduled"));
+function PulseGame({ game }) {
+  const final = isFinal(game);
+  const live = isLive(game);
+  const awayScore = Number.isFinite(Number(game?.awayScore)) ? Number(game.awayScore) : null;
+  const homeScore = Number.isFinite(Number(game?.homeScore)) ? Number(game.homeScore) : null;
+  const awayWon = final && awayScore !== null && homeScore !== null && awayScore > homeScore;
+  const homeWon = final && awayScore !== null && homeScore !== null && homeScore > awayScore;
+  const time = live
+    ? `LIVE · ${game?.status || "In progress"}`
+    : final
+      ? "FINAL"
+      : (game?._iso ? formatGameLabel(game._iso, { mode: "ET", withTZ: true }) : (game?.status || "Scheduled"));
+  const showScore = live || final;
   return (
     <Box sx={{ py: 1.15, borderTop: "1px solid", borderColor: "divider" }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: .8 }}>
-        <Typography variant="caption" color="text.secondary">{time}</Typography>
+        <Typography variant="caption" sx={{ color: live ? "warning.main" : "text.secondary", fontWeight: live ? 850 : 500 }}>{time}</Typography>
         <Typography variant="caption" color="text.secondary">{stageLabel(game?.seasonStageId)}</Typography>
       </Stack>
       <Stack spacing={.6}>
-        <MiniTeam team={game?.away} score={final ? game?.awayScore : null} />
-        <MiniTeam team={game?.home} score={final ? game?.homeScore : null} />
+        <MiniTeam team={game?.away} score={showScore ? awayScore : null} winner={awayWon} loser={final && homeWon} />
+        <MiniTeam team={game?.home} score={showScore ? homeScore : null} winner={homeWon} loser={final && awayWon} />
       </Stack>
     </Box>
   );
 }
+
 
 export default function Blog() {
   const date = React.useMemo(() => easternISODate(), []);
@@ -51,10 +67,18 @@ export default function Blog() {
 
   React.useEffect(() => {
     let cancelled = false;
-    loadPulse(date)
-      .then((pulse) => { if (!cancelled) setState({ loading: false, error: "", pulse }); })
-      .catch((e) => { if (!cancelled) setState({ loading: false, error: e?.message || String(e), pulse: null }); });
-    return () => { cancelled = true; };
+    const refresh = async (initial = false) => {
+      if (!initial && typeof document !== "undefined" && document.hidden) return;
+      try {
+        const pulse = await loadPulse(date);
+        if (!cancelled) setState({ loading: false, error: "", pulse });
+      } catch (e) {
+        if (!cancelled && initial) setState({ loading: false, error: e?.message || String(e), pulse: null });
+      }
+    };
+    refresh(true);
+    const interval = window.setInterval(() => refresh(false), 20000);
+    return () => { cancelled = true; window.clearInterval(interval); };
   }, [date]);
 
   const pulse = state.pulse;
@@ -82,12 +106,12 @@ export default function Blog() {
               <Typography variant="overline" color="text.secondary">Today's slate</Typography>
               <Typography variant="caption" color="text.secondary">{phase}</Typography>
             </Stack>
-            {pulse?.today?.length ? pulse.today.map((g) => <PulseGame key={g.id || `${g.dateKey}-${g.away?.code}-${g.home?.code}`} game={g} final={Boolean(g.completed)} />) : (
+            {pulse?.today?.length ? pulse.today.map((g) => <PulseGame key={g.id || `${g.dateKey}-${g.away?.code}-${g.home?.code}`} game={g} />) : (
               <Box sx={{ borderTop: "1px solid", borderColor: "divider", py: 3 }}><Typography variant="body2" color="text.secondary">No NBA games today.</Typography></Box>
             )}
 
             <Typography variant="overline" color="text.secondary" sx={{ display: "block", mt: 3, mb: 1 }}>Recent results</Typography>
-            {pulse?.recent?.length ? pulse.recent.slice(0, 4).map((g) => <PulseGame key={`recent-${g.id}`} game={g} final />) : (
+            {pulse?.recent?.length ? pulse.recent.slice(0, 4).map((g) => <PulseGame key={`recent-${g.id}`} game={g} />) : (
               <Typography variant="body2" color="text.secondary">No recent finals in the current window.</Typography>
             )}
           </Box>

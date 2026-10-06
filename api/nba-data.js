@@ -22,7 +22,7 @@ const ESPN_TO_UI = {
 
 const cache = new Map();
 const TTL = {
-  scoreboard: 5 * 60 * 1000,
+  scoreboard: 20 * 1000,
   schedule: 30 * 60 * 1000,
   summary: 60 * 60 * 1000,
   stats: 60 * 60 * 1000,
@@ -819,8 +819,18 @@ async function handler(req, res) {
     return res.status(405).json({ error: "method_not_allowed" });
   }
   try {
-    const payload = await handleAction(req.query || {});
-    res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=600");
+    const query = req.query || {};
+    const payload = await handleAction(query);
+    // Live-facing schedule surfaces must not sit behind Vercel's multi-minute
+    // edge cache. The adapter still keeps a short in-process scoreboard cache
+    // to avoid hammering the free upstream feed.
+    const liveFacing = query.action === "month" || query.action === "pulse";
+    res.setHeader(
+      "Cache-Control",
+      liveFacing
+        ? "no-store, max-age=0"
+        : "public, max-age=30, s-maxage=60, stale-while-revalidate=120"
+    );
     return res.status(200).json(payload);
   } catch (err) {
     const message = err?.name === "AbortError" ? "NBA data source timed out" : (err?.message || String(err));

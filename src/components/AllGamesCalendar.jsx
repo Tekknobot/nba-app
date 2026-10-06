@@ -13,7 +13,7 @@ import GameComparePanel from "./GameComparePanel";
 import NbaNews from "./NbaNews";
 import { formatGameLabel } from "../utils/datetime";
 import { logoForTeam } from "../utils/teamAssets";
-import { recordPivt3Slate } from "../utils/pivtHistory";
+import { easternDateKey, recordPivt3Slate } from "../utils/pivtHistory";
 
 function firstOfMonth(d) {
   const x = new Date(d);
@@ -42,6 +42,12 @@ function daysInMonth(year, month) {
 function isFinal(game) { return /final/i.test(String(game?.status || "")); }
 function isLive(game) { return /in progress|halftime|quarter|q\d|end of/i.test(String(game?.status || "")); }
 function num(v) { return Number.isFinite(Number(v)) ? Number(v) : null; }
+function confidenceColor(value) {
+  const v = String(value || "low").toLowerCase();
+  if (v === "high") return "success.main";
+  if (v === "low") return "warning.main";
+  return "text.secondary";
+}
 
 async function fetchMonth(year, monthIndex) {
   const q = new URLSearchParams({ action: "month", year: String(year), month: String(monthIndex + 1) });
@@ -109,7 +115,7 @@ function PivtThree({ date, onOpen }) {
               >
                 <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
                   <Typography variant="caption" color="text.secondary">#{index + 1} · {game?.away?.code} @ {game?.home?.code}</Typography>
-                  <Typography variant="caption" color="text.secondary">{prediction?.confidence || "low"}</Typography>
+                  <Typography variant="caption" sx={{ color: confidenceColor(prediction?.confidence), fontWeight: 800, textTransform: "uppercase" }}>{prediction?.confidence || "low"}</Typography>
                 </Stack>
                 <Typography sx={{ fontSize: 18, fontWeight: 900, mt: .45 }}>{prediction?.pick || "—"} {pct}%</Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .45, lineHeight: 1.35 }}>
@@ -138,15 +144,16 @@ function TeamMark({ team, size = 34 }) {
   );
 }
 
-function TeamRow({ team, score, winner }) {
+function TeamRow({ team, score, winner, loser }) {
+  const resultColor = winner ? "success.main" : loser ? "error.main" : "text.primary";
   return (
     <Stack direction="row" alignItems="center" spacing={1.1} sx={{ minWidth: 0 }}>
       <TeamMark team={team} />
       <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: winner ? 850 : 700 }} noWrap>{team?.name || team?.code}</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: winner ? 850 : 700, color: resultColor }} noWrap>{team?.name || team?.code}</Typography>
         <Typography variant="caption" color="text.secondary">{team?.code}</Typography>
       </Box>
-      {score !== null && <Typography sx={{ fontSize: 22, fontWeight: winner ? 850 : 600, fontVariantNumeric: "tabular-nums" }}>{score}</Typography>}
+      {score !== null && <Typography sx={{ fontSize: 22, fontWeight: winner ? 850 : 650, color: resultColor, fontVariantNumeric: "tabular-nums" }}>{score}</Typography>}
     </Stack>
   );
 }
@@ -164,13 +171,13 @@ function GameCard({ game, onOpen }) {
     <Card onClick={onOpen} sx={{ cursor: "pointer", "&:hover": { borderColor: "#4a4a4a", bgcolor: "#141414" } }}>
       <CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.15 }}>
-          <Typography variant="caption" sx={{ color: live ? "warning.main" : "text.secondary", fontWeight: live ? 800 : 600 }}>{live ? "LIVE" : final ? "FINAL" : time}</Typography>
+          <Typography variant="caption" sx={{ color: live ? "warning.main" : "text.secondary", fontWeight: live ? 800 : 600 }}>{live ? `LIVE · ${game?.status || "In progress"}` : final ? "FINAL" : time}</Typography>
           <Typography variant="caption" color="text.secondary">{game?.seasonStageId === 1 ? "PRE" : game?.seasonStageId === 3 ? "POST" : "NBA"}</Typography>
         </Stack>
         <Stack spacing={1}>
-          <TeamRow team={game.away} score={final || live ? awayScore : null} winner={awayWon} />
+          <TeamRow team={game.away} score={final || live ? awayScore : null} winner={awayWon} loser={final && homeWon} />
           <Divider />
-          <TeamRow team={game.home} score={final || live ? homeScore : null} winner={homeWon} />
+          <TeamRow team={game.home} score={final || live ? homeScore : null} winner={homeWon} loser={final && awayWon} />
         </Stack>
       </CardContent>
     </Card>
@@ -224,6 +231,31 @@ export default function AllGamesCalendar() {
     return () => { cancelled = true; };
   }, [viewMonth]);
 
+  // While the user is looking at today's NBA slate, refresh the current month
+  // every 20 seconds so live scores and game status keep moving without a reload.
+  useEffect(() => {
+    const today = easternDateKey();
+    if (dateKey(selectedDate) !== today) return undefined;
+    let cancelled = false;
+    const refreshLive = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const y = viewMonth.getFullYear();
+        const m = viewMonth.getMonth();
+        const rows = await fetchMonth(y, m);
+        if (cancelled) return;
+        cache.current.set(`${y}-${m}`, rows);
+        setGames(rows);
+        setError("");
+      } catch {
+        // Keep the last good live snapshot instead of flashing an error during
+        // a transient upstream miss. The normal month load still surfaces errors.
+      }
+    };
+    const id = window.setInterval(refreshLive, 20000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [selectedDate, viewMonth]);
+
   const days = useMemo(() => daysInMonth(viewMonth.getFullYear(), viewMonth.getMonth()), [viewMonth]);
   const byDay = useMemo(() => {
     const map = new Map();
@@ -271,6 +303,13 @@ export default function AllGamesCalendar() {
     setViewMonth(firstOfMonth(d));
     setSelectedDate(d);
   }
+
+  const drawerGame = useMemo(() => {
+    if (!openGame) return null;
+    const fresh = games.find((g) => String(g?.id || "") === String(openGame?.id || ""));
+    if (!fresh) return openGame;
+    return { ...fresh, _pivtPrediction: openGame?._pivtPrediction || fresh?._pivtPrediction };
+  }, [games, openGame]);
 
   return (
     <Box sx={{ maxWidth: 1280, mx: "auto", px: { xs: 1.5, sm: 3 }, py: { xs: 2, sm: 3 } }}>
@@ -334,7 +373,10 @@ export default function AllGamesCalendar() {
           )}
           <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 1.2 }}>
             <Typography variant="overline" color="text.secondary">Games</Typography>
-            <Typography variant="caption" color="text.secondary">{loading ? "Loading" : `${selectedGames.length} listed`}</Typography>
+            <Stack direction="row" spacing={1} alignItems="baseline">
+              {selectedKey === easternDateKey() && selectedGames.some(isLive) && <Typography variant="caption" sx={{ color: "warning.main", fontWeight: 800 }}>LIVE · auto refresh 20s</Typography>}
+              <Typography variant="caption" color="text.secondary">{loading ? "Loading" : `${selectedGames.length} listed`}</Typography>
+            </Stack>
           </Stack>
 
           {loading ? (
@@ -364,7 +406,7 @@ export default function AllGamesCalendar() {
         <Typography variant="caption" color="text.secondary">No API key · public NBA and publisher data</Typography>
       </Stack>
 
-      <MatchupDrawer game={openGame} open={Boolean(openGame)} onClose={() => setOpenGame(null)} />
+      <MatchupDrawer game={drawerGame} open={Boolean(openGame)} onClose={() => setOpenGame(null)} />
     </Box>
   );
 }

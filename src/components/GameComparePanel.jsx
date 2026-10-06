@@ -74,6 +74,13 @@ function TeamSection({ team, form, players, playersMode }) {
   );
 }
 
+function confidenceColor(value) {
+  const v = String(value || "low").toLowerCase();
+  if (v === "high") return "success.main";
+  if (v === "low") return "warning.main";
+  return "text.secondary";
+}
+
 function PredictionBlock({ game, prediction }) {
   if (!prediction) return null;
   const awayPct = Number(prediction.awayProbability) || 50;
@@ -89,7 +96,7 @@ function PredictionBlock({ game, prediction }) {
         </Box>
         <Box sx={{ textAlign: "right" }}>
           <Typography sx={{ fontSize: 22, fontWeight: 850 }}>{Math.max(awayPct, homePct)}%</Typography>
-          <Typography variant="caption" color="text.secondary">{prediction.confidence || "low"} confidence</Typography>
+          <Typography variant="caption" sx={{ color: confidenceColor(prediction.confidence), fontWeight: 800, textTransform: "uppercase" }}>{prediction.confidence || "low"} confidence</Typography>
         </Box>
       </Stack>
 
@@ -115,7 +122,14 @@ function PredictionBlock({ game, prediction }) {
       </Typography>
       {(prediction?.rest?.away || prediction?.rest?.home) && (
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .35 }}>
-          Rest: {game?.away?.code} {prediction?.rest?.away?.backToBack ? "back-to-back" : Number.isFinite(prediction?.rest?.away?.daysOff) ? `${prediction.rest.away.daysOff} day${prediction.rest.away.daysOff === 1 ? "" : "s"} off` : "unknown"} · {game?.home?.code} {prediction?.rest?.home?.backToBack ? "back-to-back" : Number.isFinite(prediction?.rest?.home?.daysOff) ? `${prediction.rest.home.daysOff} day${prediction.rest.home.daysOff === 1 ? "" : "s"} off` : "unknown"}
+          Rest: {game?.away?.code}{" "}
+          <Box component="span" sx={{ color: prediction?.rest?.away?.backToBack ? "warning.main" : "inherit", fontWeight: prediction?.rest?.away?.backToBack ? 800 : 400 }}>
+            {prediction?.rest?.away?.backToBack ? "back-to-back" : Number.isFinite(prediction?.rest?.away?.daysOff) ? `${prediction.rest.away.daysOff} day${prediction.rest.away.daysOff === 1 ? "" : "s"} off` : "unknown"}
+          </Box>
+          {" · "}{game?.home?.code}{" "}
+          <Box component="span" sx={{ color: prediction?.rest?.home?.backToBack ? "warning.main" : "inherit", fontWeight: prediction?.rest?.home?.backToBack ? 800 : 400 }}>
+            {prediction?.rest?.home?.backToBack ? "back-to-back" : Number.isFinite(prediction?.rest?.home?.daysOff) ? `${prediction.rest.home.daysOff} day${prediction.rest.home.daysOff === 1 ? "" : "s"} off` : "unknown"}
+          </Box>
         </Typography>
       )}
     </Box>
@@ -164,20 +178,28 @@ export default function GameComparePanel({ game }) {
     return () => { cancelled = true; };
   }, [game?.away?.code, game?.home?.code, game?._pivtPrediction, anchor, pregame]);
 
-  const liveOrFinal = /final|in progress|halftime|quarter|q\d/i.test(String(game?.status || ""));
+  const live = /in progress|halftime|quarter|q\d|end of/i.test(String(game?.status || ""));
+  const final = Boolean(game?.completed) || /final/i.test(String(game?.status || ""));
+  const liveOrFinal = live || final;
   const awayScore = Number.isFinite(Number(game?.awayScore)) ? Number(game.awayScore) : null;
   const homeScore = Number.isFinite(Number(game?.homeScore)) ? Number(game.homeScore) : null;
+  const awayWon = final && awayScore !== null && homeScore !== null && awayScore > homeScore;
+  const homeWon = final && awayScore !== null && homeScore !== null && homeScore > awayScore;
 
   return (
     <Box>
       <Box sx={{ py: .5 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={2}>
           <Box>
-            <Typography variant="caption" color="text.secondary">{game?.status || "Scheduled"}</Typography>
+            <Typography variant="caption" sx={{ color: live ? "warning.main" : "text.secondary", fontWeight: live ? 850 : 500 }}>{live ? `LIVE · ${game?.status || "In progress"}` : (game?.status || "Scheduled")}</Typography>
             <Typography sx={{ fontSize: 18, fontWeight: 800, mt: .2 }}>{game?.away?.name} @ {game?.home?.name}</Typography>
           </Box>
           {liveOrFinal && awayScore !== null && homeScore !== null && (
-            <Typography sx={{ fontSize: 26, fontWeight: 850, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{awayScore}–{homeScore}</Typography>
+            <Stack direction="row" spacing={.55} alignItems="baseline" sx={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+              <Typography component="span" sx={{ fontSize: 26, fontWeight: 850, color: final ? (awayWon ? "success.main" : "error.main") : "text.primary" }}>{awayScore}</Typography>
+              <Typography component="span" sx={{ fontSize: 18, color: "text.secondary" }}>–</Typography>
+              <Typography component="span" sx={{ fontSize: 26, fontWeight: 850, color: final ? (homeWon ? "success.main" : "error.main") : "text.primary" }}>{homeScore}</Typography>
+            </Stack>
           )}
         </Stack>
         {state.h2h && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .75 }}>Season series: {game?.away?.code} {state.h2h.away}–{state.h2h.home} {game?.home?.code}</Typography>}
