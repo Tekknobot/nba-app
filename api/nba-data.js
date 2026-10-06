@@ -158,12 +158,49 @@ function normalizeEvent(event) {
 }
 
 async function scoreboard(start, end) {
-  const dates = start === end ? ymd(start) : `${ymd(start)}-${ymd(end)}`;
-  const u = new URL(`${ESPN_SITE}/scoreboard`);
-  u.searchParams.set("dates", dates);
-  u.searchParams.set("limit", "1000");
-  const j = await fetchJson(u, TTL.scoreboard);
-  return (Array.isArray(j?.events) ? j.events : []).map(normalizeEvent).filter(Boolean);
+  const startDate = dateOnly(start);
+  const endDate = dateOnly(end || start);
+  if (!startDate || !endDate) throw new Error("Invalid scoreboard date");
+
+  // ESPN's NBA scoreboard accepts a single day (YYYYMMDD) or a whole
+  // month (YYYYMM). A YYYYMMDD-YYYYMMDD range currently returns HTTP 400,
+  // so use the compact month form whenever the requested bounds share one
+  // calendar month. Fall back to individual days only for a true cross-month
+  // range.
+  const sameMonth = startDate.slice(0, 7) === endDate.slice(0, 7);
+  if (sameMonth) {
+    const dates = startDate === endDate
+      ? ymd(startDate)
+      : startDate.slice(0, 7).replace("-", "");
+    const u = new URL(`${ESPN_SITE}/scoreboard`);
+    u.searchParams.set("dates", dates);
+    u.searchParams.set("limit", "1000");
+    const j = await fetchJson(u, TTL.scoreboard);
+    return (Array.isArray(j?.events) ? j.events : []).map(normalizeEvent).filter(Boolean);
+  }
+
+  const cursor = new Date(`${startDate}T12:00:00Z`);
+  const last = new Date(`${endDate}T12:00:00Z`);
+  const days = [];
+  while (cursor <= last) {
+    days.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  const batches = await Promise.all(days.map(async (day) => {
+    const u = new URL(`${ESPN_SITE}/scoreboard`);
+    u.searchParams.set("dates", ymd(day));
+    u.searchParams.set("limit", "100");
+    const j = await fetchJson(u, TTL.scoreboard);
+    return (Array.isArray(j?.events) ? j.events : []).map(normalizeEvent).filter(Boolean);
+  }));
+
+  const seen = new Set();
+  return batches.flat().filter((game) => {
+    const key = String(game?.id || `${game?.dateKey}-${game?.away?.code}-${game?.home?.code}`);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function teamSchedule(teamCode, season, seasonType = 2) {
@@ -381,22 +418,14 @@ async function handleAction(q) {
     const month = Number(q.month);
     if (!year || month < 1 || month > 12) throw new Error("Invalid year/month");
 
-    // July, August and September are offseason months in PIVT's NBA calendar.
-    // Return a normal empty response instead of calling an upstream provider.
-    // This keeps an upstream 403/rate-limit from being presented as a site error
-    // when there is intentionally no regular-season slate to load.
-    if (month >= 7 && month <= 9) {
-      return {
-        games: [],
-        offseason: true,
-        source: "PIVT offseason calendar",
-        keyRequired: false,
-      };
-    }
-
     const { start, end } = monthBounds(year, month);
-    const games = (await scoreboard(start, end)).filter((g) => g.seasonStageId !== 3 && g.dateKey >= start && g.dateKey <= end);
-    return { games, offseason: false, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
+    // Keep every NBA season stage ESPN returns: preseason (1), regular season
+    // (2), and postseason (3). Filtering only by the requested calendar month
+    // avoids hiding early preseason games or future playoff dates.
+    const games = (await scoreboard(start, end))
+      .filter((g) => g.dateKey >= start && g.dateKey <= end)
+      .sort((a, b) => String(a._iso).localeCompare(String(b._iso)));
+    return { games, offseason: games.length === 0, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
   }
 
   if (action === "game") {

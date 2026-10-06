@@ -166,6 +166,20 @@ export default function AllGamesCalendar() {
     el?.scrollIntoView({ inline: "center", block: "nearest" });
   }, [days, selectedKey]);
 
+  useEffect(() => {
+    const el = rail.current;
+    if (!el) return undefined;
+    const handleWheel = (event) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+        el.scrollLeft += event.deltaY;
+        event.preventDefault();
+      }
+    };
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, []);
+
   function moveMonth(delta) {
     const next = addMonths(viewMonth, delta);
     setViewMonth(next);
@@ -192,7 +206,32 @@ export default function AllGamesCalendar() {
         </Stack>
       </Stack>
 
-      <Box ref={rail} sx={{ display: "flex", gap: .5, overflowX: "auto", pb: 1.2, mb: 2, scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
+      <Box
+        ref={rail}
+        tabIndex={0}
+        role="region"
+        aria-label="NBA calendar dates"
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") rail.current?.scrollBy({ left: -160, behavior: "smooth" });
+          if (event.key === "ArrowRight") rail.current?.scrollBy({ left: 160, behavior: "smooth" });
+        }}
+        sx={{
+          display: "flex",
+          gap: .5,
+          overflowX: "auto",
+          overflowY: "hidden",
+          overscrollBehaviorX: "contain",
+          scrollBehavior: "smooth",
+          pb: 1.2,
+          mb: 2,
+          scrollbarWidth: "thin",
+          scrollbarColor: "#3b3b3b transparent",
+          "&::-webkit-scrollbar": { height: 6 },
+          "&::-webkit-scrollbar-track": { background: "transparent" },
+          "&::-webkit-scrollbar-thumb": { background: "#3b3b3b", borderRadius: 999 },
+          "&:focus-visible": { outline: "1px solid", outlineColor: "divider", outlineOffset: 4 },
+        }}
+      >
         {days.map((d, i) => {
           const key = dateKey(d);
           const selected = key === selectedKey;
