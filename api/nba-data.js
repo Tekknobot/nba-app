@@ -643,8 +643,11 @@ function recentGamesFromPool(pool, teamCode, anchor, limit = 5) {
 async function topPicksForDate(date) {
   const anchor = dateOnly(date);
   if (!anchor) throw new Error("Invalid top-picks date");
+  // Rank the full slate using only information available before this date.
+  // Keeping live/final games in the slate makes the day's PIVT 3 stable after
+  // tipoff instead of replacing a started pick with a later game.
   const games = (await scoreboard(anchor, anchor))
-    .filter((g) => g.dateKey === anchor && !g.completed && g.state !== "in");
+    .filter((g) => g.dateKey === anchor);
   if (!games.length) return [];
 
   const modelEnd = new Date(`${anchor}T12:00:00Z`);

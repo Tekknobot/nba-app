@@ -53,3 +53,10 @@ The Express API runs on port 5001 and Create React App runs on its normal develo
 ## Design
 
 The UI is intentionally restrained: text-only PIVT branding, neutral dark palette, square geometry, compact schedule cards, image-led news rows, and a focused matchup drawer. The favicon is a black square with a white geometric `P`.
+
+## PIVT 3 prediction record
+
+PIVT now keeps an immutable local history of PIVT 3 slates. When a current or future slate is first shown, the original three picks, model percentages, confidence labels, and model notes are frozen in browser storage. The `/record` screen later checks NBA results and marks each pick WIN, MISS, or OPEN, with overall pick accuracy, W-L record, and completed 3/3 sweeps.
+
+Historical prediction data is intentionally not back-filled after a selected game has started. This keeps the track record pre-game and prevents later model changes from rewriting earlier picks. Because this project has no database, the record is stored per browser/device in `localStorage`.
+

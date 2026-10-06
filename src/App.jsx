@@ -5,6 +5,7 @@ import AllGamesCalendar from "./components/AllGamesCalendar";
 import Header from "./components/Header";
 import GamePage from "./components/GamePage";
 import Blog from "./components/Blog";
+import PivtRecord from "./components/PivtRecord";
 import { Analytics } from "@vercel/analytics/react";
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/all" element={<AllGamesCalendar />} />
           <Route path="/game/:id" element={<GamePage />} />
           <Route path="/pulse" element={<Blog />} />
+          <Route path="/record" element={<PivtRecord />} />
           <Route path="/blog" element={<Navigate to="/pulse" replace />} />
           <Route path="*" element={<Navigate to="/all" replace />} />
         </Routes>

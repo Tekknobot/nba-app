@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Link as RouterLink } from "react-router-dom";
 import {
   Avatar, Box, Button, Card, CardContent, CircularProgress, Divider,
   Drawer, IconButton, Stack, Typography, useMediaQuery
@@ -12,6 +13,7 @@ import GameComparePanel from "./GameComparePanel";
 import NbaNews from "./NbaNews";
 import { formatGameLabel } from "../utils/datetime";
 import { logoForTeam } from "../utils/teamAssets";
+import { recordPivt3Slate } from "../utils/pivtHistory";
 
 function firstOfMonth(d) {
   const x = new Date(d);
@@ -64,7 +66,11 @@ function PivtThree({ date, onOpen }) {
     let cancelled = false;
     setState({ loading: true, picks: [], error: "" });
     fetchTopPicks(date)
-      .then((picks) => { if (!cancelled) setState({ loading: false, picks, error: "" }); })
+      .then((picks) => {
+        if (cancelled) return;
+        setState({ loading: false, picks, error: "" });
+        if (picks.length) recordPivt3Slate(date, picks);
+      })
       .catch((e) => { if (!cancelled) setState({ loading: false, picks: [], error: e?.message || String(e) }); });
     return () => { cancelled = true; };
   }, [date]);
@@ -78,7 +84,10 @@ function PivtThree({ date, onOpen }) {
           <Typography variant="overline" color="text.secondary">PIVT 3</Typography>
           <Typography sx={{ fontSize: 15, fontWeight: 800 }}>Strongest model leans</Typography>
         </Box>
-        <Typography variant="caption" color="text.secondary">not betting odds</Typography>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Button component={RouterLink} to="/record" color="inherit" size="small" sx={{ minWidth: 0, px: .8, fontSize: 11 }}>Record</Button>
+          <Typography variant="caption" color="text.secondary">not betting odds</Typography>
+        </Stack>
       </Stack>
 
       {state.loading ? (

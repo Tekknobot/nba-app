@@ -6,6 +6,7 @@ export default function Header() {
   const { pathname } = useLocation();
   const onGames = pathname === "/" || pathname.startsWith("/all") || pathname.startsWith("/game/");
   const onBlog = pathname.startsWith("/pulse") || pathname.startsWith("/blog");
+  const onRecord = pathname.startsWith("/record");
 
   return (
     <AppBar position="sticky" elevation={0} color="transparent" sx={{ borderBottom: "1px solid", borderColor: "divider", bgcolor: "rgba(10,10,10,.92)", backdropFilter: "blur(14px)" }}>
@@ -16,6 +17,7 @@ export default function Header() {
         <Stack direction="row" spacing={0.5}>
           <Button component={RouterLink} to="/all" color="inherit" size="small" sx={{ color: onGames ? "text.primary" : "text.secondary", bgcolor: onGames ? "action.selected" : "transparent" }}>Games</Button>
           <Button component={RouterLink} to="/pulse" color="inherit" size="small" sx={{ color: onBlog ? "text.primary" : "text.secondary", bgcolor: onBlog ? "action.selected" : "transparent" }}>Pulse</Button>
+          <Button component={RouterLink} to="/record" color="inherit" size="small" sx={{ color: onRecord ? "text.primary" : "text.secondary", bgcolor: onRecord ? "action.selected" : "transparent" }}>Record</Button>
         </Stack>
       </Toolbar>
     </AppBar>
