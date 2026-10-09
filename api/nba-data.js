@@ -508,128 +508,108 @@ async function getTopPlayers(teamCode, anchor, days = 21, topN = 3, stage = 2) {
   startD.setUTCDate(startD.getUTCDate() - safeDays);
   const start = startD.toISOString().slice(0, 10);
 
+  // Only games in the CURRENT NBA season are permissible. Prior-season
+  // player statistics and season totals with future information are excluded.
   const [regular, preseason] = await Promise.all([
     teamSchedule(team, season, 2).catch(() => []),
     teamSchedule(team, season, 1).catch(() => []),
   ]);
-  const recentGames = dedupeCompletedGames(stage === 1 ? preseason : regular, team, safeAnchor, 10)
-    .filter((g) => g.dateKey >= start);
-
-  if (recentGames.length) {
-    const boxes = await Promise.all(recentGames.map(async (g) => {
-      try { return playersFromSummary(await gameSummary(g.id), team); }
-      catch { return []; }
-    }));
-    const players = aggregatePlayers(boxes, safeTopN);
-    if (players.length) return { players, _mode: "recent", _season: season, _sampleGames: recentGames.length };
+  const regularGames = dedupeCompletedGames(regular, team, safeAnchor, 10).filter(g => g.dateKey >= start);
+  const preseasonGames = dedupeCompletedGames(preseason, team, safeAnchor, 8).filter(g => g.dateKey >= start);
+  const usePreseason = stage === 1 || regularGames.length < 5;
+  const weightedGames = [...regularGames.map(g => ({ game: g, weight: 1, source: 'regular' })),
+    ...(usePreseason ? preseasonGames.map(g => ({ game: g, weight: stage === 1 ? 1 : .35, source: 'preseason' })) : [])];
+  const boxResults = await Promise.all(weightedGames.map(async ({ game, weight }) => {
+    try { return { rows: playersFromSummary(await gameSummary(game.id), team), weight }; }
+    catch { return { rows: [], weight }; }
+  }));
+  const byId = new Map();
+  for (const { rows, weight } of boxResults) for (const row of rows) {
+    const id = String(row.player_id);
+    if (!byId.has(id)) byId.set(id, { ...row, totalWeight: 0, minSum: 0, ptsSum: 0, rebSum: 0, astSum: 0, games: 0 });
+    const x = byId.get(id);
+    x.totalWeight += weight; x.games += 1;
+    x.minSum += minutesToNumber(row.min) * weight;
+    x.ptsSum += (Number(row.pts) || 0) * weight;
+    x.rebSum += (Number(row.reb) || 0) * weight;
+    x.astSum += (Number(row.ast) || 0) * weight;
   }
+  const players = [...byId.values()].map(x => ({
+    player_id: x.player_id, player: x.player, image: x.image,
+    min: minutesString(x.minSum / x.totalWeight),
+    pts: x.ptsSum / x.totalWeight, reb: x.rebSum / x.totalWeight,
+    ast: x.astSum / x.totalWeight,
+  })).sort((a,b) => minutesToNumber(b.min) - minutesToNumber(a.min) || b.pts - a.pts).slice(0, safeTopN);
+  return { players, _mode: players.length ? (regularGames.length >= 5 ? 'regular' : 'current-season-player') : 'unavailable',
+    _season: season, _sampleGames: weightedGames.length, _regularGames: regularGames.length,
+    _preseasonGames: preseasonGames.length };
 
-  let players = await seasonFallbackPlayers(team, season, safeTopN).catch(() => []);
-  let usedSeason = season;
-  if (!players.length) {
-    players = await seasonFallbackPlayers(team, season - 1, safeTopN).catch(() => []);
-    usedSeason = season - 1;
-  }
-  return { players, _mode: "season-fallback", _season: usedSeason, _sampleGames: 0 };
 }
 
 async function recentTeamGames(teamCode, anchor, limit = 5, stage = 2) {
   const team = normCode(teamCode);
   const safeAnchor = dateOnly(anchor) || new Date().toISOString().slice(0, 10);
   const season = seasonEndYearFrom(safeAnchor);
-  // Preseason never counts as regular-season evidence. Early regular season
-  // borrows a discounted prior from the previous regular season, not exhibitions.
-  const stages = stage === 1 ? [[season, 1], [season - 1, 1]]
-    : [[season, 2], [season - 1, 2]];
-  const pools = await Promise.all(stages.map(async ([year, type]) => ({
-    year, type, games: await teamSchedule(team, year, type).catch(() => [])
-  })));
-  const current = dedupeCompletedGames(pools[0].games.filter(g => Number(g.seasonStageId) === stage), team, safeAnchor, limit);
-  const older = dedupeCompletedGames(pools[1].games.filter(g => Number(g.seasonStageId) === stage), team, safeAnchor, limit);
-  return [...current, ...older].slice(0, limit).map(g => ({ ...g,
-    _historicalPrior: !current.some(row => row.id === g.id),
-    _currentStageGames: current.length,
-  }));
+  const games = await teamSchedule(team, season, stage).catch(() => []);
+  return dedupeCompletedGames(games.filter(g => Number(g.seasonStageId) === stage), team, safeAnchor, limit);
+
 }
 
 function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlayers, homePlayers, anchor = "") {
   const stage = predictionStage(anchor);
-  const currentAway = awayGames.filter(g => !g._historicalPrior && Number(g.seasonStageId) === stage);
-  const currentHome = homeGames.filter(g => !g._historicalPrior && Number(g.seasonStageId) === stage);
-  const priorAway = awayGames.filter(g => g._historicalPrior && Number(g.seasonStageId) === stage);
-  const priorHome = homeGames.filter(g => g._historicalPrior && Number(g.seasonStageId) === stage);
-  const blend = (recent, prior) => {
-    const m = teamFormMetrics(recent, recent === currentAway || recent === priorAway ? awayCode : homeCode);
-    const historical = teamFormMetrics(prior, recent === currentAway || recent === priorAway ? awayCode : homeCode);
-    const recentWeight = stage === 1 ? 1 : Math.min(1, recent.length / 12);
-    const priorWeight = prior.length ? 1 - recentWeight : 0;
-    const divisor = recent.length ? recentWeight + priorWeight : priorWeight;
-    return { ...m,
-      winPct: divisor ? (m.winPct * (recent.length ? recentWeight : 0) + historical.winPct * priorWeight) / divisor : .5,
-      avgMargin: divisor ? (m.avgMargin * (recent.length ? recentWeight : 0) + historical.avgMargin * priorWeight) / divisor : 0,
-      marginStdDev: Math.max(m.marginStdDev, historical.marginStdDev * priorWeight),
-      games: recent.length,
-    };
-  };
-  const away = blend(currentAway, priorAway);
-  const home = blend(currentHome, priorHome);
+  const currentAway = awayGames.filter(g => Number(g.seasonStageId) === stage);
+  const currentHome = homeGames.filter(g => Number(g.seasonStageId) === stage);
+  const away = teamFormMetrics(currentAway, awayCode);
+  const home = teamFormMetrics(currentHome, homeCode);
   const awayImpact = playerImpact(awayPlayers);
   const homeImpact = playerImpact(homePlayers);
+  const hasPlayerStats = awayImpact !== null && homeImpact !== null;
   const awayRest = restProfile(currentAway, anchor);
   const homeRest = restProfile(currentHome, anchor);
-
-  const formRating = (m) => ((m.winPct - 0.5) * 18) + clamp(m.avgMargin, -15, 15) * 0.65;
-  let homeEdge = formRating(home) - formRating(away) + 1.25;
-  const hasPlayerStats = awayImpact !== null && homeImpact !== null;
-  if (hasPlayerStats) homeEdge += clamp((homeImpact - awayImpact) / 7, -3, 3);
-
-  // Fatigue is deliberately a modest adjustment. It should break close ties,
-  // not overpower actual basketball form.
+  const minGames = Math.min(currentAway.length, currentHome.length);
+  // The first five games are player driven. Team form becomes progressively
+  // more influential from game five onward; never use previous seasons.
+  const teamWeight = clamp((minGames - 4) / 16, 0, .75);
+  const formRating = m => ((m.winPct - .5) * 18) + clamp(m.avgMargin, -15, 15) * .65;
+  const playerDiff = hasPlayerStats ? clamp((homeImpact - awayImpact) / 2.5, -9, 9) : 0;
+  let homeEdge = 1.25 + playerDiff * (1 - teamWeight) + (formRating(home) - formRating(away)) * teamWeight;
   if (awayRest.backToBack && !homeRest.backToBack) homeEdge += 1.1;
   else if (homeRest.backToBack && !awayRest.backToBack) homeEdge -= 1.1;
-  else if (Number.isFinite(awayRest.daysOff) && Number.isFinite(homeRest.daysOff)) {
-    const restGap = clamp(homeRest.daysOff - awayRest.daysOff, -2, 2);
-    homeEdge += restGap * 0.3;
-  }
+  else if (Number.isFinite(awayRest.daysOff) && Number.isFinite(homeRest.daysOff))
+    homeEdge += clamp(homeRest.daysOff - awayRest.daysOff, -2, 2) * .3;
 
-  // Volatility, sparse samples and unavailable lineup verification shrink the
-  // raw heuristic toward 50%. No invented injury status is assumed.
-  const evidence = Math.min(1, Math.min(currentAway.length, currentHome.length) / 10);
-  const playerReliability = hasPlayerStats ? .92 : .78;
+  // Absence of reliable player data is explicitly flagged, never disguised as
+  // an informative 51% prediction. Neutral probabilities remain a fallback.
+  const sufficientData = hasPlayerStats || minGames >= 5;
+  const evidenceFactor = minGames < 5 ? (hasPlayerStats ? .85 : 0) : (hasPlayerStats ? .92 : .70);
   const rawProb = 100 / (1 + Math.exp(-homeEdge / 8.5));
-  let homeProb = 50 + (rawProb - 50) * (.40 + .60 * evidence) * playerReliability;
-  const minGames = Math.min(away.games, home.games);
-  homeProb = clamp(homeProb, minGames < 3 ? 42 : 30, minGames < 3 ? 58 : 70);
+  let homeProb = sufficientData ? 50 + (rawProb - 50) * evidenceFactor : 50;
+  homeProb = clamp(homeProb, 30, 70);
   const awayProb = 100 - homeProb;
   const pick = homeProb >= 50 ? normCode(homeCode) : normCode(awayCode);
   const pickProb = Math.max(homeProb, awayProb);
   const volatility = Math.max(away.marginStdDev || 0, home.marginStdDev || 0);
-  let confidence = "low";
-  if (minGames >= 5 && hasPlayerStats && pickProb >= 64 && volatility <= 16) confidence = "high";
-  else if (minGames >= 5 && pickProb >= 58 && volatility <= 20) confidence = "medium";
-
+  let confidence = 'low';
+  if (minGames >= 12 && hasPlayerStats && pickProb >= 64 && volatility <= 16) confidence = 'high';
+  else if (minGames >= 5 && hasPlayerStats && pickProb >= 58 && volatility <= 20) confidence = 'medium';
   const factors = [];
-  const winDiff = home.winPct - away.winPct;
-  const marginDiff = home.avgMargin - away.avgMargin;
-  if (Math.abs(winDiff) >= 0.12) factors.push(`${winDiff > 0 ? normCode(homeCode) : normCode(awayCode)} has the stronger recent win rate`);
-  if (Math.abs(marginDiff) >= 2.5) factors.push(`${marginDiff > 0 ? normCode(homeCode) : normCode(awayCode)} has the better recent scoring margin`);
-  if (hasPlayerStats && Math.abs(homeImpact - awayImpact) >= 2.5) factors.push(`${homeImpact > awayImpact ? normCode(homeCode) : normCode(awayCode)} has the stronger top-player production sample`);
-  if (awayRest.backToBack !== homeRest.backToBack) factors.push(`${awayRest.backToBack ? normCode(homeCode) : normCode(awayCode)} has the rest advantage`);
-  if (factors.length < 2) factors.push(`${normCode(homeCode)} receives a small home-court adjustment`);
-
+  if (!sufficientData) factors.push('Insufficient current-season player and team evidence');
+  if (hasPlayerStats && Math.abs(homeImpact - awayImpact) >= 1.5)
+    factors.push(`${homeImpact > awayImpact ? normCode(homeCode) : normCode(awayCode)} has stronger current-season player production`);
+  if (teamWeight > 0 && Math.abs(home.avgMargin - away.avgMargin) >= 2.5)
+    factors.push(`${home.avgMargin > away.avgMargin ? normCode(homeCode) : normCode(awayCode)} has the stronger current regular-season margin`);
+  if (awayRest.backToBack !== homeRest.backToBack)
+    factors.push(`${awayRest.backToBack ? normCode(homeCode) : normCode(awayCode)} has the rest advantage`);
+  if (factors.length < 2) factors.push(`${normCode(homeCode)} gets a small home-court adjustment`);
   return {
-    pick,
-    homeProbability: Math.round(homeProb),
-    awayProbability: Math.round(awayProb),
-    confidence,
-    sample: { awayGames: away.games, homeGames: home.games, playerStats: hasPlayerStats, stage,
-      availabilityVerified: false, priorUsed: priorAway.length > 0 || priorHome.length > 0 },
-    modelVersion: "stage-aware-v2", seasonType: stage,
-    form: { away, home },
-    rest: { away: awayRest, home: homeRest },
-    playerImpact: { away: awayImpact, home: homeImpact },
-    factors: factors.slice(0, 4),
-    model: "Stage-isolated form + discounted prior + uncertainty shrinkage + rest + player production (availability unverified)",
+    pick, homeProbability: Math.round(homeProb), awayProbability: Math.round(awayProb), confidence,
+    insufficientData: !sufficientData,
+    sample: { awayGames: away.games, homeGames: home.games, playerStats: hasPlayerStats,
+      stage, availabilityVerified: false, priorUsed: false, teamWeight },
+    modelVersion: 'player-first-v3', seasonType: stage,
+    form: { away, home }, rest: { away: awayRest, home: homeRest },
+    playerImpact: { away: awayImpact, home: homeImpact }, factors: factors.slice(0, 4),
+    model: 'Current-season player production + current-season team form + rest (no previous-season data; availability unverified)',
   };
 }
 
@@ -651,7 +631,7 @@ async function calibratePrediction(prediction, anchor) {
     const sql = neon(process.env.DATABASE_URL);
     const rows = await sql`SELECT snapshot FROM pivt3_slates WHERE date < ${anchor} ORDER BY date DESC LIMIT 600`;
     const eligible = rows.flatMap(row => row.snapshot?.picks || []).filter(p =>
-      p.modelVersion === "stage-aware-v2" && Number(p.seasonType) === Number(prediction.seasonType) &&
+      p.modelVersion === "player-first-v3" && Number(p.seasonType) === Number(prediction.seasonType) &&
       p.result?.completed && p.result?.actualWinner);
     if (eligible.length < 60) return prediction;
     const predicted = eligible.map(p => ({
@@ -693,8 +673,8 @@ async function predictionForMatchup(awayCode, homeCode, anchorInput) {
   const [awayGames, homeGames, awayPlayersData, homePlayersData] = await Promise.all([
     recentTeamGames(away, modelAnchor, 5, predictionStage(anchor)),
     recentTeamGames(home, modelAnchor, 5, predictionStage(anchor)),
-    getTopPlayers(away, modelAnchor, 21, 3, predictionStage(anchor)),
-    getTopPlayers(home, modelAnchor, 21, 3, predictionStage(anchor)),
+    getTopPlayers(away, modelAnchor, 45, 7, predictionStage(anchor)),
+    getTopPlayers(home, modelAnchor, 45, 7, predictionStage(anchor)),
   ]);
 
   return {
@@ -707,9 +687,9 @@ function predictionRankScore(prediction) {
   const edge = Math.max(Number(prediction?.homeProbability) || 50, Number(prediction?.awayProbability) || 50) - 50;
   const sample = Math.min(Number(prediction?.sample?.awayGames) || 0, Number(prediction?.sample?.homeGames) || 0);
   const confidenceBonus = prediction?.confidence === "high" ? 4 : prediction?.confidence === "medium" ? 2 : 0;
-  const reliability = (0.4 + Math.min(10, sample) * .06) * (prediction?.sample?.playerStats ? 1 : .87);
+  const reliability = (prediction?.sample?.playerStats ? .8 : .1) * (.8 + Math.min(10, sample) * .02);
   const availabilityPenalty = prediction?.sample?.availabilityVerified ? 0 : 1.25;
-  return Math.round((edge * reliability + Math.min(5, sample) * .45 + confidenceBonus - availabilityPenalty) * 10) / 10;
+  return prediction?.insufficientData ? -999 : Math.round((edge * reliability + Math.min(5, sample) * .45 + confidenceBonus - availabilityPenalty) * 10) / 10;
 }
 
 function recentGamesFromPool(pool, teamCode, anchor, limit = 5) {
@@ -735,14 +715,15 @@ async function topPicksForDate(date) {
   const history = (await scoreboard(historyStart, historyEnd)).filter((g) => g.completed && Number(g.seasonStageId) === predictionStage(anchor));
 
   const season = seasonEndYearFrom(anchor);
-  const [currentAthletes, previousAthletes] = await Promise.all([
-    seasonAthleteRows(season).catch(() => []),
-    seasonAthleteRows(season - 1).catch(() => []),
-  ]);
-  const playersFor = (teamCode) => {
-    const current = parseSeasonPlayers(currentAthletes, teamCode, 3);
-    return predictionStage(anchor) === 2 && current.length ? current : parseSeasonPlayers(previousAthletes, teamCode, 3);
-  };
+  // Use only current-season player box scores as of the model cutoff.
+  // The ranking pass uses preseason and regular games from this season;
+  // canonical matchup calculations are repeated for shortlisted games.
+  const seasonPlayers = await Promise.all([...new Set(games.flatMap(g => [g.away?.code,g.home?.code]))].map(async team => {
+    const data = await getTopPlayers(team, historyEnd, 45, 7, predictionStage(anchor)).catch(() => ({ players: [] }));
+    return [team, data.players];
+  }));
+  const playerMap = new Map(seasonPlayers);
+  const playersFor = teamCode => playerMap.get(teamCode) || [];
 
   // Fast pass across the whole slate, then re-run the strongest candidates
   // through the exact same canonical predictor used by the matchup drawer.
@@ -767,7 +748,7 @@ async function topPicksForDate(date) {
     }
   }));
 
-  return canonical.sort((a, b) => b.rankScore - a.rankScore).slice(0, 3);
+  return canonical.filter(row => !row.prediction.insufficientData).sort((a, b) => b.rankScore - a.rankScore).slice(0, 3);
 }
 
 async function handleAction(q) {
