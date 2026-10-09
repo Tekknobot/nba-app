@@ -118,15 +118,34 @@ export function easternDateKey(date = new Date()) {
   }
 }
 
+// Neon is authoritative. Local IndexedDB is only read during explicit migration.
+const CLOUD_API = "/api/pivt-history";
+let activeSyncKey = "";
+export function setPivtCloudKey(key) { activeSyncKey = String(key || "").trim(); }
+export function hasPivtCloudKey() { return Boolean(activeSyncKey); }
+async function cloudRequest(method = "GET", slates) {
+  const headers = {};
+  if (method !== "GET") {
+    if (!activeSyncKey) throw new Error("Enter the database write key before recording or verifying predictions");
+    headers.Authorization = `Bearer ${activeSyncKey}`;
+    headers["Content-Type"] = "application/json";
+  }
+  const response = await fetch(CLOUD_API, { method, headers, cache: "no-store", ...(slates ? { body: JSON.stringify({ slates }) } : {}) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Database request failed (${response.status})`);
+  return payload;
+}
 export async function loadPivtHistory() {
+  return sortHistory((await cloudRequest()).slates || []);
+}
+async function loadLocalMigrationRows() {
   const db = await readyDb();
   if (!db) return [];
   const tx = db.transaction([SLATE_STORE], "readonly");
-  const rows = await requestToPromise(tx.objectStore(SLATE_STORE).getAll()).catch(() => []);
+  const rows = await requestToPromise(tx.objectStore(SLATE_STORE).getAll());
   await transactionDone(tx).catch(() => {});
   return sortHistory(rows);
 }
-
 function compactTeam(team) {
   return {
     code: team?.code || "",
@@ -171,77 +190,30 @@ export async function recordPivt3Slate(date, picks) {
     if (selectedGameStarted) return loadPivtHistory();
   }
 
-  const db = await readyDb();
-  if (!db) return [];
-  const tx = db.transaction([SLATE_STORE], "readwrite");
-  const store = tx.objectStore(SLATE_STORE);
-  const snapshot = {
-    date,
-    recordedAt: new Date().toISOString(),
-    picks: picks.slice(0, 3).map(compactPick),
-  };
-  let inserted = true;
-  const addRequest = store.add(snapshot);
-  addRequest.onerror = (event) => {
-    if (addRequest.error?.name === "ConstraintError") {
-      // The date already exists. Keep the original immutable snapshot.
-      inserted = false;
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  };
-  await transactionDone(tx);
-  if (inserted) dispatchHistoryChange();
+  const snapshot = { date, recordedAt: new Date().toISOString(), picks: picks.slice(0, 3).map(compactPick) };
+  await cloudRequest("POST", [snapshot]);
+  dispatchHistoryChange();
   return loadPivtHistory();
 }
 
 export async function updatePivt3Results(resultMap) {
   if (!resultMap || typeof resultMap !== "object") return loadPivtHistory();
-  const db = await readyDb();
-  if (!db) return [];
-
-  const readTx = db.transaction([SLATE_STORE], "readonly");
-  const rows = await requestToPromise(readTx.objectStore(SLATE_STORE).getAll()).catch(() => []);
-  await transactionDone(readTx).catch(() => {});
-
-  let changed = false;
+  const rows = await loadPivtHistory();
   const changedRows = [];
   for (const slate of rows) {
-    let slateChanged = false;
-    const nextPicks = (slate.picks || []).map((pick) => {
-      const result = resultMap[String(pick.gameId)] || null;
-      if (!result) return pick;
-      const existing = pick.result || {};
-      const core = {
-        completed: Boolean(result.completed),
-        status: result.status || "",
-        actualWinner: result.actualWinner || null,
-        awayScore: Number.isFinite(Number(result.awayScore)) ? Number(result.awayScore) : null,
-        homeScore: Number.isFinite(Number(result.homeScore)) ? Number(result.homeScore) : null,
-      };
-      const existingCore = {
-        completed: Boolean(existing.completed),
-        status: existing.status || "",
-        actualWinner: existing.actualWinner || null,
-        awayScore: Number.isFinite(Number(existing.awayScore)) ? Number(existing.awayScore) : null,
-        homeScore: Number.isFinite(Number(existing.homeScore)) ? Number(existing.homeScore) : null,
-      };
-      const differs = JSON.stringify(existingCore) !== JSON.stringify(core);
-      if (!differs) return pick;
+    let changed = false;
+    const picks = slate.picks.map(pick => {
+      const result = resultMap[String(pick.gameId)];
+      if (!result || !result.completed || !result.actualWinner || pick.result?.completed) return pick;
       changed = true;
-      slateChanged = true;
-      return { ...pick, result: { ...core, verifiedAt: new Date().toISOString() } };
+      return { ...pick, result: { ...result, verifiedAt: new Date().toISOString() } };
     });
-    if (slateChanged) changedRows.push({ ...slate, picks: nextPicks });
+    if (changed) changedRows.push({ ...slate, picks });
   }
-
   if (changedRows.length) {
-    const writeTx = db.transaction([SLATE_STORE], "readwrite");
-    const store = writeTx.objectStore(SLATE_STORE);
-    changedRows.forEach((row) => store.put(row));
-    await transactionDone(writeTx);
+    await cloudRequest("POST", changedRows);
+    dispatchHistoryChange();
   }
-  if (changed) dispatchHistoryChange();
   return loadPivtHistory();
 }
 
@@ -264,58 +236,26 @@ export function resultForGame(game) {
 }
 
 export async function getPivtDbInfo() {
-  const db = await readyDb();
-  if (!db) return { available: false, engine: "none", name: DB_NAME, version: DB_VERSION };
   const history = await loadPivtHistory();
-  return { available: true, engine: "IndexedDB", name: DB_NAME, version: DB_VERSION, slates: history.length };
+  return { available: true, engine: "Neon PostgreSQL", slates: history.length };
 }
 
-// Portable backups never overwrite original picks on matching dates.
+// Exports are optional safety copies. They are never used as the live database.
 export async function exportPivtBackup() {
   return JSON.stringify({ format: "pivt3-backup-v1", exportedAt: new Date().toISOString(), slates: await loadPivtHistory() }, null, 2);
 }
-
 export async function importPivtBackup(data) {
   const payload = typeof data === "string" ? JSON.parse(data) : data;
   if (payload?.format !== "pivt3-backup-v1" || !Array.isArray(payload.slates)) throw new Error("Invalid PIVT backup");
-  if (payload.slates.length > 2000) throw new Error("Backup is too large");
-  const db = await readyDb();
-  if (!db) throw new Error("Local database unavailable");
-  const existing = await loadPivtHistory();
-  const known = new Map(existing.map(row => [row.date, row]));
-  const tx = db.transaction([SLATE_STORE], "readwrite");
-  const store = tx.objectStore(SLATE_STORE);
-  for (const row of payload.slates) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(row?.date || "")) || !Array.isArray(row?.picks)) continue;
-    const old = known.get(row.date);
-    if (!old) store.add(row);
-    else {
-      // Results can be added later, but the first-recorded prediction stays frozen.
-      const picks = old.picks.map(pick => {
-        const newer = row.picks.find(p => p.gameId === pick.gameId);
-        return { ...pick, result: pick.result?.completed ? pick.result : newer?.result?.completed ? newer.result : pick.result };
-      });
-      store.put({ ...old, picks });
-    }
-  }
-  await transactionDone(tx);
+  await cloudRequest("POST", payload.slates);
   dispatchHistoryChange();
   return loadPivtHistory();
 }
-
 export async function synchronizePivtCloud(secret) {
-  if (!secret) throw new Error("Sync key required");
-  const headers = { Authorization: `Bearer ${secret}` };
-  const remote = await fetch("/api/pivt-history", { headers, cache: "no-store" });
-  const data = await remote.json();
-  if (!remote.ok) throw new Error(data.error || "Could not read cloud history");
-  await importPivtBackup({ format: "pivt3-backup-v1", slates: data.slates });
-  const local = await loadPivtHistory();
-  const upload = await fetch("/api/pivt-history", {
-    method: "POST", headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ slates: local })
-  });
-  const result = await upload.json();
-  if (!upload.ok) throw new Error(result.error || "Could not save cloud history");
-  return { slates: local.length, saved: result.saved };
+  setPivtCloudKey(secret);
+  const legacyRows = await loadLocalMigrationRows();
+  if (legacyRows.length) await cloudRequest("POST", legacyRows);
+  dispatchHistoryChange();
+  const history = await loadPivtHistory();
+  return { slates: history.length, migrated: legacyRows.length };
 }

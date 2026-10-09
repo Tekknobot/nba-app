@@ -3,7 +3,7 @@ import { Avatar, Box, Button, CircularProgress, Divider, Stack, Typography, Text
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
-import { easternDateKey, getPivtDbInfo, loadPivtHistory, recordPivt3Slate, resultForGame, updatePivt3Results, exportPivtBackup, importPivtBackup, synchronizePivtCloud } from "../utils/pivtHistory";
+import { easternDateKey, getPivtDbInfo, loadPivtHistory, recordPivt3Slate, resultForGame, updatePivt3Results, exportPivtBackup, importPivtBackup, synchronizePivtCloud, hasPivtCloudKey } from "../utils/pivtHistory";
 import { logoForTeam } from "../utils/teamAssets";
 
 
@@ -98,6 +98,7 @@ function slateSummary(slate) {
 export default function PivtRecord() {
   const [state, setState] = React.useState({ loading: true, verifying: false, error: "", history: [], dbInfo: null });
   const [syncKey, setSyncKey] = React.useState("");
+  const [writeEnabled, setWriteEnabled] = React.useState(false);
   const [syncStatus, setSyncStatus] = React.useState("");
   const fileRef = React.useRef(null);
   const downloadBackup = async () => {
@@ -109,23 +110,24 @@ export default function PivtRecord() {
   const restore = async event => {
     const file = event.target.files?.[0];
     if (!file) return;
-    try { const rows = await importPivtBackup(await file.text()); setSyncStatus(`Imported ${rows.length} slates (original picks preserved)`); }
+    try { const rows = await importPivtBackup(await file.text()); setSyncStatus(`Imported ${rows.length} slates to Neon (original picks preserved)`); await verify(); }
     catch (e) { setSyncStatus(e.message); }
     event.target.value = "";
   };
   const cloudSync = async () => {
     setSyncStatus("Synchronizing...");
-    try { const r = await synchronizePivtCloud(syncKey); setSyncStatus(`Cloud synchronized: ${r.slates} slates`); }
+    try { const r = await synchronizePivtCloud(syncKey); setSyncStatus(`Neon connected: ${r.slates} slates, ${r.migrated} local slates migrated`); setWriteEnabled(true); await verify(); }
     catch (e) { setSyncStatus(`Cloud sync unavailable: ${e.message}`); }
   };
 
   const verify = React.useCallback(async () => {
-    let history = await loadPivtHistory();
+    let history;
+    try { history = await loadPivtHistory(); } catch (e) { setState(s => ({ ...s, loading: false, verifying: false, error: e.message })); return; }
     const dbInfo = await getPivtDbInfo().catch(() => null);
     setState((s) => ({ ...s, history, dbInfo, loading: false, verifying: true, error: "" }));
     try {
       const today = easternDateKey();
-      if (!history.some((row) => row?.date === today)) {
+      if (hasPivtCloudKey() && !history.some((row) => row?.date === today)) {
         const picks = await fetchTopPicks(today).catch(() => []);
         if (picks.length) history = await recordPivt3Slate(today, picks);
       }
@@ -148,7 +150,7 @@ export default function PivtRecord() {
       batches.flat().forEach((game) => {
         if (game?.id) resultMap[String(game.id)] = resultForGame(game);
       });
-      const next = await updatePivt3Results(resultMap);
+      const next = hasPivtCloudKey() ? await updatePivt3Results(resultMap) : history;
       const dbInfo = await getPivtDbInfo().catch(() => null);
       setState({ loading: false, verifying: false, error: "", history: next, dbInfo });
     } catch (e) {
@@ -159,7 +161,7 @@ export default function PivtRecord() {
   React.useEffect(() => {
     verify();
     const refresh = async () => {
-      const history = await loadPivtHistory();
+      const history = await loadPivtHistory().catch(() => []);
       const dbInfo = await getPivtDbInfo().catch(() => null);
       setState((s) => ({ ...s, history, dbInfo }));
     };
@@ -232,31 +234,44 @@ export default function PivtRecord() {
       </Box>
 
 
-      <Box sx={{ mt: 3, mb: 3, borderTop: "1px solid", borderColor: "divider", pt: 2 }}>
-        <Typography sx={{ fontWeight: 850, fontSize: 16, mb: .8 }}>Model performance</Typography>
-        <Typography variant="caption" color="text.secondary">Only settled picks count. Legacy picks with unknown season type remain separate. Brier: lower is better; reliable probability calibration requires a larger sample.</Typography>
-        <Stack direction="row" spacing={2} sx={{ mt: 1.5, mb: 2, flexWrap: "wrap" }}>
-          {rolling.map(r => <Box key={r.n}><Typography sx={{ fontSize: 21, fontWeight: 850 }}>{r.accuracy === null ? "—" : `${r.accuracy}%`}</Typography><Typography variant="caption" color="text.secondary">Last {r.n} ({r.count} played)</Typography></Box>)}
-        </Stack>
-        {[['Season type',stages],['Confidence band',bands],['Predicted probability band',probabilities]].map(([heading,rows]) => <Box key={heading} sx={{ mb: 1.5 }}>
-          <Typography sx={{ fontWeight: 750, mb: .5 }}>{heading}</Typography>
-          <Table size="small"><TableHead><TableRow><TableCell>Group</TableCell><TableCell align="right">W / N</TableCell><TableCell align="right">Accuracy</TableCell><TableCell align="right">Brier</TableCell></TableRow></TableHead>
-          <TableBody>{rows.map(r => <TableRow key={r.key}><TableCell>{r.key}</TableCell><TableCell align="right">{r.correct}/{r.n}</TableCell><TableCell align="right">{r.accuracy}%</TableCell><TableCell align="right">{r.brier}</TableCell></TableRow>)}</TableBody></Table>
-        </Box>)}
+      <Box sx={{ mb: 3, border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden" }}>
+        <Box sx={{ px: 2, py: 1.5, borderBottom: "1px solid", borderColor: "divider" }}>
+          <Typography sx={{ fontWeight: 850, fontSize: 16 }}>Model performance</Typography>
+          <Typography variant="caption" color="text.secondary">Settled picks only. Brier score: lower is better. Calibration needs a larger sample.</Typography>
+        </Box>
+        <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", borderBottom: "1px solid", borderColor: "divider" }}>
+          {rolling.map((r,i) => <Box key={r.n} sx={{ px: 2, py: 1.5, borderRight: i<2 ? "1px solid" : 0, borderColor: "divider" }}>
+            <Typography sx={{ fontSize: 22, fontWeight: 850, fontVariantNumeric:"tabular-nums" }}>{r.accuracy === null ? "—" : `${r.accuracy}%`}</Typography>
+            <Typography variant="caption" color="text.secondary">Last {r.n} · {r.count} played</Typography>
+          </Box>)}
+        </Box>
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs:"1fr", md:"repeat(3,minmax(0,1fr))" } }}>
+          {[["Season type",stages],["Confidence",bands],["Probability",probabilities]].map(([heading,rows],i) => <Box key={heading} sx={{ minWidth:0, borderRight:{md:i<2 ? "1px solid":"none"}, borderBottom:{xs:i<2 ? "1px solid":"none",md:"none"}, borderColor:"divider" }}>
+            <Typography sx={{ fontWeight: 800, px:1.5, py:1.25, fontSize:13, bgcolor:"action.hover" }}>{heading}</Typography>
+            <Table size="small" sx={{ "& th, & td": { px: 1, py: 1, fontSize: 11.5 }, "& th": { color:"text.secondary" } }}>
+              <TableHead><TableRow><TableCell>Group</TableCell><TableCell align="right">W/N</TableCell><TableCell align="right">Hit %</TableCell><TableCell align="right">Brier</TableCell></TableRow></TableHead>
+              <TableBody>{rows.length ? rows.map(r => <TableRow key={r.key}><TableCell sx={{fontWeight:650}}>{r.key}</TableCell><TableCell align="right">{r.correct}/{r.n}</TableCell><TableCell align="right" sx={{color:r.accuracy>=60?"success.main":r.accuracy<50?"error.main":"text.primary"}}>{r.accuracy}%</TableCell><TableCell align="right">{r.brier}</TableCell></TableRow>) : <TableRow><TableCell colSpan={4}>No settled picks</TableCell></TableRow>}</TableBody>
+            </Table>
+          </Box>)}
+        </Box>
       </Box>
-      <Box sx={{ borderTop: "1px solid", borderColor: "divider", pt: 2, pb: 2 }}>
-        <Typography sx={{ fontWeight: 850, mb: .75 }}>History backup and cloud sync</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.3 }}>Browser storage remains primary. Export a backup first. Cloud sync requires a Vercel Neon database and private sync key.</Typography>
-        <Stack direction={{xs:"column",sm:"row"}} spacing={1} sx={{ mb: 1 }}>
-          <Button variant="outlined" size="small" onClick={downloadBackup}>Export JSON backup</Button>
-          <Button variant="outlined" size="small" onClick={()=>fileRef.current?.click()}>Import backup</Button>
+      <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, px: 2, py: 2, mb: 3 }}>
+        <Stack direction={{xs:"column",sm:"row"}} justifyContent="space-between" spacing={1}>
+          <Box><Typography sx={{ fontWeight: 850 }}>Neon database</Typography>
+            <Typography variant="body2" color="text.secondary">Neon is the primary record store. Enter your write key for automated recording and final-score verification while this tab is open. Existing browser slates can be migrated once.</Typography>
+          </Box>
+          <Typography variant="caption" sx={{ color: state.error ? "error.main" : "success.main", fontWeight:800, whiteSpace:"nowrap" }}>{state.error ? "UNAVAILABLE" : writeEnabled ? "READ / WRITE" : "READ ONLY"}</Typography>
+        </Stack>
+        <Stack direction={{xs:"column",sm:"row"}} spacing={1} sx={{ mt:2, mb:1 }}>
+          <TextField size="small" type="password" label="Database write key" value={syncKey} onChange={e=>setSyncKey(e.target.value)} sx={{ flex:1, minWidth: 180 }}/>
+          <Button variant="contained" size="small" disabled={!syncKey} onClick={cloudSync}>Connect & migrate local records</Button>
+        </Stack>
+        {!!syncStatus && <Typography variant="caption" sx={{ display:"block", mb:1 }}>{syncStatus}</Typography>}
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Button variant="outlined" size="small" onClick={downloadBackup}>Export database JSON</Button>
+          <Button variant="outlined" size="small" disabled={!writeEnabled} onClick={()=>fileRef.current?.click()}>Import JSON to Neon</Button>
           <input type="file" accept="application/json,.json" ref={fileRef} hidden onChange={restore}/>
         </Stack>
-        <Stack direction={{xs:"column",sm:"row"}} spacing={1}>
-          <TextField size="small" type="password" label="Private cloud sync key" value={syncKey} onChange={e=>setSyncKey(e.target.value)} sx={{ minWidth: 220 }}/>
-          <Button variant="outlined" size="small" disabled={!syncKey} onClick={cloudSync}>Sync with Vercel database</Button>
-        </Stack>
-        {!!syncStatus && <Typography variant="caption" sx={{ display:"block", mt:1 }}>{syncStatus}</Typography>}
       </Box>
 
       {state.error && <Typography variant="caption" color="error.main" sx={{ display: "block", mb: 2 }}>Result verification unavailable: {state.error}</Typography>}
@@ -265,32 +280,33 @@ export default function PivtRecord() {
         <Box sx={{ py: 8, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
           <Typography sx={{ fontWeight: 800 }}>No PIVT 3 slates recorded yet.</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: .5, maxWidth: 560 }}>
-            PIVT will start the record automatically when a current or future PIVT 3 slate appears. Existing browser history is migrated into the PIVT database automatically. Past dates are never back-filled after results are known.
+            PIVT will start the record automatically when a current or future PIVT 3 slate appears. Existing browser history can be migrated to Neon with the write key. Past dates are never back-filled after results are known.
           </Typography>
         </Box>
       ) : (
-        <Stack spacing={1.25}>
-          {history.map((slate) => {
-            const summary = slateSummary(slate);
-            const label = summary.complete ? `${summary.wins}/${summary.total}${summary.wins === summary.total ? " SWEEP" : ""}` : `${summary.resolved}/${summary.total} FINAL`;
-            return (
-              <Box key={slate.date} sx={{ border: "1px solid", borderColor: "divider", px: { xs: 1.2, sm: 1.5 }, pt: 1.35 }}>
-                <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={2} sx={{ pb: 1.1 }}>
-                  <Box>
-                    <Typography sx={{ fontWeight: 850 }}>{prettyDate(slate.date)}</Typography>
-                    <Typography variant="caption" color="text.secondary">Recorded {new Date(slate.recordedAt).toLocaleString()}</Typography>
-                  </Box>
-                  <Typography sx={{ fontSize: 13, fontWeight: 900, letterSpacing: ".05em", color: !summary.complete ? "warning.main" : summary.wins === summary.total ? "success.main" : summary.wins >= 2 ? "warning.main" : "error.main", whiteSpace: "nowrap" }}>{label}</Typography>
-                </Stack>
-                {(slate.picks || []).map((pick, i) => <PickRow key={pick.gameId || `${slate.date}-${i}`} pick={pick} />)}
-              </Box>
-            );
-          })}
-        </Stack>
+        <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, overflow:"hidden" }}>
+          <Box sx={{ px:2, py:1.25, bgcolor:"action.hover", borderBottom:"1px solid", borderColor:"divider" }}><Typography sx={{fontWeight:850}}>Recorded slates</Typography></Box>
+          <Box sx={{overflowX:"auto"}}>
+            <Table size="small" sx={{minWidth:640, "& th":{fontWeight:800, fontSize:11, textTransform:"uppercase", color:"text.secondary"}, "& td":{fontSize:12, py:1.2}}}>
+              <TableHead><TableRow><TableCell>Date</TableCell><TableCell>Matchup</TableCell><TableCell>Pick</TableCell><TableCell align="right">Chance</TableCell><TableCell>Confidence</TableCell><TableCell>Final score</TableCell><TableCell align="right">Result</TableCell></TableRow></TableHead>
+              <TableBody>{history.flatMap(slate => (slate.picks||[]).map((pick,i) => {
+                const r=pick.result||{}; const done=Boolean(r.completed&&r.actualWinner); const win=done&&r.actualWinner===pick.pick;
+                return <TableRow key={`${slate.date}-${pick.gameId||i}`} hover>
+                  <TableCell sx={{whiteSpace:"nowrap"}}>{i===0 ? <><Typography sx={{fontWeight:800,fontSize:12}}>{prettyDate(slate.date)}</Typography><Typography variant="caption" color="text.secondary">{slateSummary(slate).wins}/{slateSummary(slate).total} wins</Typography></>: ""}</TableCell>
+                  <TableCell sx={{fontWeight:650, whiteSpace:"nowrap"}}>{pick.away?.code} @ {pick.home?.code}</TableCell>
+                  <TableCell sx={{fontWeight:850}}>{pick.pick}</TableCell><TableCell align="right">{pickPercent(pick)}%</TableCell>
+                  <TableCell sx={{color:confidenceColor(pick.confidence)}}>{confidenceLabel(pick.confidence)}</TableCell>
+                  <TableCell sx={{whiteSpace:"nowrap"}}>{done?`${pick.away?.code} ${r.awayScore} · ${pick.home?.code} ${r.homeScore}`:"—"}</TableCell>
+                  <TableCell align="right" sx={{fontWeight:850,color:done?(win?"success.main":"error.main"):"warning.main"}}>{done?(win?"WIN":"MISS"):"OPEN"}</TableCell>
+                </TableRow>;
+              }))}</TableBody>
+            </Table>
+          </Box>
+        </Box>
       )}
 
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2.5, lineHeight: 1.55 }}>
-        {state.dbInfo?.available ? `PIVT database: ${state.dbInfo.engine} · ${state.dbInfo.slates ?? history.length} slates stored. Local browser storage; optional Neon cloud sync.` : "PIVT database unavailable in this browser."}
+        {state.dbInfo?.available ? `Primary database: ${state.dbInfo.engine} · ${state.dbInfo.slates ?? history.length} slates stored.` : "PIVT database unavailable in this browser."}
       </Typography>
     </Box>
   );

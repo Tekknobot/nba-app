@@ -1,7 +1,7 @@
 // Optional Neon persistence. Never exposes database credentials to the client.
 const crypto = require("node:crypto");
 const { neon } = require("@neondatabase/serverless");
-const configured = () => Boolean(process.env.DATABASE_URL && process.env.PIVT_SYNC_SECRET);
+const configured = () => Boolean(process.env.DATABASE_URL);
 const dateOK = date => /^\d{4}-\d{2}-\d{2}$/.test(String(date || ""));
 const authorize = (req) => {
   const secret = process.env.PIVT_SYNC_SECRET || "";
@@ -12,7 +12,7 @@ const authorize = (req) => {
 module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   if (!configured()) return res.status(503).json({ error: "Cloud sync not configured; local records remain available" });
-  if (!authorize(req)) return res.status(401).json({ error: "Incorrect sync key" });
+  if (req.method !== "GET" && !authorize(req)) return res.status(401).json({ error: "Incorrect sync key" });
   const sql = neon(process.env.DATABASE_URL);
   try {
     // Table setup uses an idempotent schema and never drops existing rows.
