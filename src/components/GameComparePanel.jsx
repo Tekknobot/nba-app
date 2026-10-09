@@ -83,6 +83,7 @@ function confidenceColor(value) {
 
 function PredictionBlock({ game, prediction }) {
   if (!prediction) return null;
+  if (prediction.insufficientData) return <Box sx={{ borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider", py: 2, my: 1.5 }}><Typography variant="overline" color="text.secondary">PIVT prediction</Typography><Typography sx={{fontWeight:800, mt:.4}}>Prediction not available yet</Typography><Typography variant="body2" color="text.secondary" sx={{mt:.5}}>{prediction.reason || "Not enough current-season data yet. Check again closer to game day."}</Typography><Typography variant="caption" color="text.secondary" sx={{display:"block",mt:1}}>The model updates as current-season player and team statistics become available. No previous-season data is used.</Typography></Box>;
   const awayPct = Number(prediction.awayProbability) || 50;
   const homePct = Number(prediction.homeProbability) || 50;
   const pickName = prediction.pick === game?.home?.code ? game?.home?.name : game?.away?.name;

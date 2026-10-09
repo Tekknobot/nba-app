@@ -81,7 +81,7 @@ function PivtThree({ date, onOpen }) {
     return () => { cancelled = true; };
   }, [date]);
 
-  if (!state.loading && !state.picks.length) return null;
+  if (!state.loading && !state.picks.length && !state.error) return <Box sx={{mb:2,py:1.5,borderTop:"1px solid",borderBottom:"1px solid",borderColor:"divider"}}><Typography variant="overline" color="text.secondary">PIVT 3</Typography><Typography sx={{fontWeight:750,fontSize:14}}>Predictions will appear closer to game day</Typography><Typography variant="caption" color="text.secondary">PIVT waits for current-season evidence and only ranks eligible matchups within three days of tipoff. Check back as player statistics develop.</Typography></Box>;
 
   return (
     <Box sx={{ mb: 2.25, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider", py: 1.5 }}>

@@ -555,6 +555,34 @@ async function recentTeamGames(teamCode, anchor, limit = 5, stage = 2) {
 
 }
 
+// Do not manufacture distant forecasts from lineups that are not confirmed.
+const FORECAST_WINDOW_DAYS = 3;
+function daysUntil(date) {
+  const target = Date.parse(`${dateOnly(date)}T12:00:00Z`);
+  const today = Date.parse(`${new Date().toISOString().slice(0,10)}T12:00:00Z`);
+  return Math.round((target - today) / 86400000);
+}
+function unavailableForecast(stage, reason, daysAway = null) {
+  return {
+    pick: null, homeProbability: null, awayProbability: null, confidence: 'unavailable',
+    insufficientData: true, reason,
+    sample: { awayGames: 0, homeGames: 0, playerStats: false, stage, availabilityVerified: false, priorUsed: false },
+    modelVersion: 'player-first-v4', seasonType: stage,
+    factors: [reason], model: 'Current-season evidence only; prediction withheld pending sufficient data'
+  };
+}
+async function currentRoster(teamCode, season) {
+  // Team roster is the source of present-day membership, NOT previous-year stats.
+  const u = new URL(`${ESPN_SITE}/teams/${TEAM_ID[normCode(teamCode)]}/roster`);
+  u.searchParams.set('season', String(season));
+  try {
+    const j = await fetchJson(u, TTL.schedule);
+    const groups = Array.isArray(j?.athletes) ? j.athletes : [];
+    const athletes = groups.flatMap(x => Array.isArray(x?.items) ? x.items : [x]);
+    return athletes.filter(a => a?.id).map(a => ({ id: String(a.id), name: a.displayName || a.fullName || '', status: a.status?.type || a.status?.name || null }));
+  } catch { return []; }
+}
+
 function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlayers, homePlayers, anchor = "") {
   const stage = predictionStage(anchor);
   const currentAway = awayGames.filter(g => Number(g.seasonStageId) === stage);
@@ -580,8 +608,8 @@ function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlay
 
   // Absence of reliable player data is explicitly flagged, never disguised as
   // an informative 51% prediction. Neutral probabilities remain a fallback.
-  const sufficientData = hasPlayerStats || minGames >= 5;
-  const evidenceFactor = minGames < 5 ? (hasPlayerStats ? .85 : 0) : (hasPlayerStats ? .92 : .70);
+  const sufficientData = ((awayPlayers?.length || 0) >= 3 && (homePlayers?.length || 0) >= 3) || minGames >= 5;
+  const evidenceFactor = minGames < 5 ? (sufficientData ? .85 : 0) : (hasPlayerStats ? .92 : .70);
   const rawProb = 100 / (1 + Math.exp(-homeEdge / 8.5));
   let homeProb = sufficientData ? 50 + (rawProb - 50) * evidenceFactor : 50;
   homeProb = clamp(homeProb, 30, 70);
@@ -606,7 +634,7 @@ function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlay
     insufficientData: !sufficientData,
     sample: { awayGames: away.games, homeGames: home.games, playerStats: hasPlayerStats,
       stage, availabilityVerified: false, priorUsed: false, teamWeight },
-    modelVersion: 'player-first-v3', seasonType: stage,
+    modelVersion: 'player-first-v4', seasonType: stage,
     form: { away, home }, rest: { away: awayRest, home: homeRest },
     playerImpact: { away: awayImpact, home: homeImpact }, factors: factors.slice(0, 4),
     model: 'Current-season player production + current-season team form + rest (no previous-season data; availability unverified)',
@@ -631,7 +659,7 @@ async function calibratePrediction(prediction, anchor) {
     const sql = neon(process.env.DATABASE_URL);
     const rows = await sql`SELECT snapshot FROM pivt3_slates WHERE date < ${anchor} ORDER BY date DESC LIMIT 600`;
     const eligible = rows.flatMap(row => row.snapshot?.picks || []).filter(p =>
-      p.modelVersion === "player-first-v3" && Number(p.seasonType) === Number(prediction.seasonType) &&
+      p.modelVersion === "player-first-v4" && Number(p.seasonType) === Number(prediction.seasonType) &&
       p.result?.completed && p.result?.actualWinner);
     if (eligible.length < 60) return prediction;
     const predicted = eligible.map(p => ({
@@ -663,22 +691,33 @@ async function predictionForMatchup(awayCode, homeCode, anchorInput) {
   const home = normCode(homeCode);
   const anchor = dateOnly(anchorInput) || new Date().toISOString().slice(0, 10);
   if (!TEAM_ID[away] || !TEAM_ID[home]) throw new Error("Invalid prediction matchup");
+  if (daysUntil(anchor) > FORECAST_WINDOW_DAYS) return { prediction: unavailableForecast(predictionStage(anchor), 'Too far ahead to predict. Check closer to game day.', daysUntil(anchor)), playerModes: {away:'waiting', home:'waiting'} };
 
   // Use the day before tipoff as the data cutoff so every PIVT surface uses
   // exactly the same completed-game/player sample for a scheduled matchup.
   const cutoff = new Date(`${anchor}T12:00:00Z`);
   cutoff.setUTCDate(cutoff.getUTCDate() - 1);
-  const modelAnchor = cutoff.toISOString().slice(0, 10);
+  const modelAnchor = [cutoff.toISOString().slice(0, 10), new Date().toISOString().slice(0,10)].sort()[0];
 
-  const [awayGames, homeGames, awayPlayersData, homePlayersData] = await Promise.all([
+  const [awayGames, homeGames, awayPlayersData, homePlayersData, awayRoster, homeRoster] = await Promise.all([
     recentTeamGames(away, modelAnchor, 5, predictionStage(anchor)),
     recentTeamGames(home, modelAnchor, 5, predictionStage(anchor)),
     getTopPlayers(away, modelAnchor, 45, 7, predictionStage(anchor)),
     getTopPlayers(home, modelAnchor, 45, 7, predictionStage(anchor)),
+    currentRoster(away, seasonEndYearFrom(anchor)),
+    currentRoster(home, seasonEndYearFrom(anchor)),
   ]);
 
+  // Filter box-score players to the current roster whenever ESPN returns one.
+  // Stars with no current-season minutes remain unmeasured, not rated as zero or from last year.
+  const filterRoster = (players, roster) => roster.length ? players.filter(p => roster.some(r => r.id === String(p.player_id))) : players;
+  const awayPlayers = filterRoster(awayPlayersData.players, awayRoster);
+  const homePlayers = filterRoster(homePlayersData.players, homeRoster);
+  const pred = predictionFromInputs(away, home, awayGames, homeGames, awayPlayers, homePlayers, anchor);
+  pred.sample = { ...pred.sample, awayRosterCount: awayRoster.length, homeRosterCount: homeRoster.length, awayPlayersMeasured: awayPlayers.length, homePlayersMeasured: homePlayers.length };
+  if (pred.insufficientData) { pred.pick = null; pred.homeProbability = null; pred.awayProbability = null; pred.confidence = 'unavailable'; pred.reason = 'Not enough current-season player data yet. Check again as games are played.'; pred.factors = [pred.reason]; }
   return {
-    prediction: await calibratePrediction(predictionFromInputs(away, home, awayGames, homeGames, awayPlayersData.players, homePlayersData.players, anchor), anchor),
+    prediction: pred.insufficientData ? pred : await calibratePrediction(pred, anchor),
     playerModes: { away: awayPlayersData._mode, home: homePlayersData._mode },
   };
 }
@@ -704,11 +743,11 @@ async function topPicksForDate(date) {
   // tipoff instead of replacing a started pick with a later game.
   const games = (await scoreboard(anchor, anchor))
     .filter((g) => g.dateKey === anchor);
-  if (!games.length) return [];
+  if (!games.length || daysUntil(anchor) > FORECAST_WINDOW_DAYS) return [];
 
   const modelEnd = new Date(`${anchor}T12:00:00Z`);
   modelEnd.setUTCDate(modelEnd.getUTCDate() - 1);
-  const historyEnd = modelEnd.toISOString().slice(0, 10);
+  const historyEnd = [modelEnd.toISOString().slice(0, 10), new Date().toISOString().slice(0,10)].sort()[0];
   const historyStartD = new Date(modelEnd);
   historyStartD.setUTCDate(historyStartD.getUTCDate() - 27);
   const historyStart = historyStartD.toISOString().slice(0, 10);
@@ -738,7 +777,7 @@ async function topPicksForDate(date) {
     return { game, prediction, rankScore: predictionRankScore(prediction) };
   }).sort((a, b) => b.rankScore - a.rankScore);
 
-  const shortlist = ranked.slice(0, Math.min(5, ranked.length));
+  const shortlist = ranked.filter(row => !row.prediction.insufficientData).slice(0, Math.min(5, ranked.length));
   const canonical = await Promise.all(shortlist.map(async (row) => {
     try {
       const exact = await predictionForMatchup(row.game.away?.code, row.game.home?.code, anchor);
