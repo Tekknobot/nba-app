@@ -67,3 +67,28 @@ PIVT 3 history uses the browser's native IndexedDB database (`pivt`, store `pivt
 ## Bookmark / browser icon handling
 
 PIVT uses uniquely named bookmark-facing favicon assets so desktop and mobile browsers do not reuse older cached artwork. Conventional fallback paths (`/favicon.ico`, `/apple-touch-icon.png`, Android/Windows aliases) mirror the same black-square P icon. `vercel.json` asks Vercel to revalidate the fallback icon and manifest metadata.
+
+
+## 2026 prediction update and optional Neon sync
+
+- Stage-aware model: preseason and regular-season samples are isolated. Early regular-season forecasts blend a progressively decreasing historical regular-season prior. Uncertainty shrinks extremes; injury availability remains **unverified** rather than guessed.
+- PIVT 3 ranks picks by sample-adjusted strength and quality; a 70% estimate remains a guarded ceiling, **not** a validated real-world 70% probability.
+- Record page has rolling 25/50/100-pick accuracy, stage and confidence breakdown, Brier scores, JSON export/import and optional authenticated cloud sync. Historical picks stay frozen.
+
+### Set up cloud sync in Vercel (optional)
+
+1. Vercel project > Storage > Marketplace > **Neon**; create and attach a database to this project. Neon automatically supplies `DATABASE_URL` in Vercel environment variables. Review the Vercel/Neon plan and limits.
+2. Vercel project > Settings > Environment Variables: add **`PIVT_SYNC_SECRET`** with a strong unique random string (at least 32 characters). Set it for Production, and optionally Preview, then redeploy. Do not prefix it `REACT_APP_` and never publish it in source control.
+3. On the existing browser/device where your recorded predictions live, open **Prediction record > Export JSON backup** and save that file first.
+4. Paste your exact `PIVT_SYNC_SECRET` into the private cloud sync key field and click **Sync with Vercel database**. The API creates its table automatically on first authorized request. No SQL editor setup required.
+5. On a second browser, enter the same key and sync to restore records there. Sync is manually initiated to avoid exposing a persistent administrative credential in a public website.
+
+Cloud sync is **not automatically enabled** without database credentials. This project's serverless route has a shared-secret administrative model suitable for a private maintainer, not public multiuser accounts. Never expose the sync key to visitors. Original snapshots are first-write-wins on the server; subsequent results can be verified without rewriting predicted outcomes. Backups/imports preserve the existing prediction on matching slate dates. If Neon fails or remains unconfigured, IndexedDB continues working.
+
+### Calibration caveat
+
+Brier score and group accuracy now reveal calibration quality but the service does **not** retrain on its own; automatic probability recalibration should only be switched on after a meaningful collection of timestamped, pregame out-of-sample predictions. Historical records without season metadata are labeled `Legacy / unknown`, not retroactively guessed.
+
+**Build note:** The old npm lockfile was removed because the Neon driver was newly added and the npm registry was unreachable in the patch environment. Vercel's default `npm install` recreates a correct lock during dependency installation. If your Vercel project specifies `npm ci` as its install command, switch that setting to `npm install` for the first patched deployment and commit the newly generated package-lock.json afterward.
+
+Cloud-enabled probability calibration: after at least 60 settled predictions from `stage-aware-v2` within the same NBA season stage, the API compares predictions with earlier actual results (never same-day or future results). A bin must contain at least 25 observations before it is allowed to adjust the projected probability, with Beta smoothing and a 50% correction strength. Historical model predictions are never changed; the active adjustment affects only new output. Calibration is unavailable without Neon and defaults to the conservative base heuristic.

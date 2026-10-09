@@ -1,9 +1,9 @@
 import React from "react";
-import { Avatar, Box, CircularProgress, Divider, Stack, Typography } from "@mui/material";
+import { Avatar, Box, Button, CircularProgress, Divider, Stack, Typography, TextField, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
-import { easternDateKey, getPivtDbInfo, loadPivtHistory, recordPivt3Slate, resultForGame, updatePivt3Results } from "../utils/pivtHistory";
+import { easternDateKey, getPivtDbInfo, loadPivtHistory, recordPivt3Slate, resultForGame, updatePivt3Results, exportPivtBackup, importPivtBackup, synchronizePivtCloud } from "../utils/pivtHistory";
 import { logoForTeam } from "../utils/teamAssets";
 
 
@@ -97,6 +97,27 @@ function slateSummary(slate) {
 
 export default function PivtRecord() {
   const [state, setState] = React.useState({ loading: true, verifying: false, error: "", history: [], dbInfo: null });
+  const [syncKey, setSyncKey] = React.useState("");
+  const [syncStatus, setSyncStatus] = React.useState("");
+  const fileRef = React.useRef(null);
+  const downloadBackup = async () => {
+    const backup = await exportPivtBackup();
+    const url = URL.createObjectURL(new Blob([backup], { type: "application/json" }));
+    const a = document.createElement("a"); a.href = url; a.download = `pivt3-backup-${easternDateKey()}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
+  const restore = async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try { const rows = await importPivtBackup(await file.text()); setSyncStatus(`Imported ${rows.length} slates (original picks preserved)`); }
+    catch (e) { setSyncStatus(e.message); }
+    event.target.value = "";
+  };
+  const cloudSync = async () => {
+    setSyncStatus("Synchronizing...");
+    try { const r = await synchronizePivtCloud(syncKey); setSyncStatus(`Cloud synchronized: ${r.slates} slates`); }
+    catch (e) { setSyncStatus(`Cloud sync unavailable: ${e.message}`); }
+  };
 
   const verify = React.useCallback(async () => {
     let history = await loadPivtHistory();
@@ -161,6 +182,26 @@ export default function PivtRecord() {
   const completedSlates = history.filter((row) => slateSummary(row).complete);
   const sweeps = completedSlates.filter((row) => slateSummary(row).wins === slateSummary(row).total).length;
 
+  const settled = history.flatMap(row => (row.picks || []).map(pick => ({ ...pick, slateDate: row.date })) )
+    .filter(pick => pick.result?.completed && pick.result?.actualWinner);
+  const grouped = (keyFn) => Object.entries(settled.reduce((acc, p) => {
+    const key = keyFn(p); (acc[key] ||= []).push(p); return acc;
+  }, {})).sort(([a],[b]) => a.localeCompare(b)).map(([key, picks]) => {
+    const n = picks.length, correct = picks.filter(p => p.pick === p.result.actualWinner).length;
+    const brier = picks.reduce((sum,p) => sum + ((pickPercent(p) / 100) - (p.pick === p.result.actualWinner ? 1 : 0)) ** 2, 0) / n;
+    return { key, n, correct, accuracy: Math.round(correct/n*100), brier: brier.toFixed(3) };
+  });
+  const stages = grouped(p => p.seasonType === 1 ? "Preseason" : p.seasonType === 2 ? "Regular season" : "Legacy / unknown");
+  const bands = grouped(p => p.confidence?.toUpperCase() || "UNKNOWN");
+  const probabilities = grouped(p => {
+    const pct = pickPercent(p);
+    return pct < 60 ? "50–59%" : pct < 65 ? "60–64%" : "65–70%";
+  });
+  const chronology = [...settled].sort((a,b) => (a.slateDate || "").localeCompare(b.slateDate || ""));
+  const rolling = [25, 50, 100].map(n => {
+    const window = chronology.slice(-n);
+    return { n, count: window.length, accuracy: window.length ? Math.round(window.filter(p=>p.pick===p.result.actualWinner).length / window.length * 100) : null };
+  });
   return (
     <Box sx={{ maxWidth: 980, mx: "auto", px: { xs: 1.5, sm: 3 }, py: { xs: 2.5, sm: 4 } }}>
       <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ xs: "stretch", sm: "end" }} spacing={1.5}>
@@ -188,6 +229,34 @@ export default function PivtRecord() {
             <Typography variant="caption" color="text.secondary">{label}</Typography>
           </Box>
         ))}
+      </Box>
+
+
+      <Box sx={{ mt: 3, mb: 3, borderTop: "1px solid", borderColor: "divider", pt: 2 }}>
+        <Typography sx={{ fontWeight: 850, fontSize: 16, mb: .8 }}>Model performance</Typography>
+        <Typography variant="caption" color="text.secondary">Only settled picks count. Legacy picks with unknown season type remain separate. Brier: lower is better; reliable probability calibration requires a larger sample.</Typography>
+        <Stack direction="row" spacing={2} sx={{ mt: 1.5, mb: 2, flexWrap: "wrap" }}>
+          {rolling.map(r => <Box key={r.n}><Typography sx={{ fontSize: 21, fontWeight: 850 }}>{r.accuracy === null ? "—" : `${r.accuracy}%`}</Typography><Typography variant="caption" color="text.secondary">Last {r.n} ({r.count} played)</Typography></Box>)}
+        </Stack>
+        {[['Season type',stages],['Confidence band',bands],['Predicted probability band',probabilities]].map(([heading,rows]) => <Box key={heading} sx={{ mb: 1.5 }}>
+          <Typography sx={{ fontWeight: 750, mb: .5 }}>{heading}</Typography>
+          <Table size="small"><TableHead><TableRow><TableCell>Group</TableCell><TableCell align="right">W / N</TableCell><TableCell align="right">Accuracy</TableCell><TableCell align="right">Brier</TableCell></TableRow></TableHead>
+          <TableBody>{rows.map(r => <TableRow key={r.key}><TableCell>{r.key}</TableCell><TableCell align="right">{r.correct}/{r.n}</TableCell><TableCell align="right">{r.accuracy}%</TableCell><TableCell align="right">{r.brier}</TableCell></TableRow>)}</TableBody></Table>
+        </Box>)}
+      </Box>
+      <Box sx={{ borderTop: "1px solid", borderColor: "divider", pt: 2, pb: 2 }}>
+        <Typography sx={{ fontWeight: 850, mb: .75 }}>History backup and cloud sync</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.3 }}>Browser storage remains primary. Export a backup first. Cloud sync requires a Vercel Neon database and private sync key.</Typography>
+        <Stack direction={{xs:"column",sm:"row"}} spacing={1} sx={{ mb: 1 }}>
+          <Button variant="outlined" size="small" onClick={downloadBackup}>Export JSON backup</Button>
+          <Button variant="outlined" size="small" onClick={()=>fileRef.current?.click()}>Import backup</Button>
+          <input type="file" accept="application/json,.json" ref={fileRef} hidden onChange={restore}/>
+        </Stack>
+        <Stack direction={{xs:"column",sm:"row"}} spacing={1}>
+          <TextField size="small" type="password" label="Private cloud sync key" value={syncKey} onChange={e=>setSyncKey(e.target.value)} sx={{ minWidth: 220 }}/>
+          <Button variant="outlined" size="small" disabled={!syncKey} onClick={cloudSync}>Sync with Vercel database</Button>
+        </Stack>
+        {!!syncStatus && <Typography variant="caption" sx={{ display:"block", mt:1 }}>{syncStatus}</Typography>}
       </Box>
 
       {state.error && <Typography variant="caption" color="error.main" sx={{ display: "block", mb: 2 }}>Result verification unavailable: {state.error}</Typography>}
@@ -221,7 +290,7 @@ export default function PivtRecord() {
       )}
 
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2.5, lineHeight: 1.55 }}>
-        {state.dbInfo?.available ? `PIVT database: ${state.dbInfo.engine} · ${state.dbInfo.slates ?? history.length} slates stored. No Vercel configuration or API keys required.` : "PIVT database unavailable in this browser."}
+        {state.dbInfo?.available ? `PIVT database: ${state.dbInfo.engine} · ${state.dbInfo.slates ?? history.length} slates stored. Local browser storage; optional Neon cloud sync.` : "PIVT database unavailable in this browser."}
       </Typography>
     </Box>
   );

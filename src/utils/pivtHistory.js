@@ -150,6 +150,8 @@ function compactPick(row) {
     confidence: prediction?.confidence || "low",
     factors: Array.isArray(prediction?.factors) ? prediction.factors.slice(0, 4) : [],
     model: prediction?.model || "",
+    modelVersion: prediction?.modelVersion || "legacy-v1",
+    seasonType: prediction?.seasonType || row?.game?.seasonStageId || null,
     result: null,
   };
 }
@@ -266,4 +268,54 @@ export async function getPivtDbInfo() {
   if (!db) return { available: false, engine: "none", name: DB_NAME, version: DB_VERSION };
   const history = await loadPivtHistory();
   return { available: true, engine: "IndexedDB", name: DB_NAME, version: DB_VERSION, slates: history.length };
+}
+
+// Portable backups never overwrite original picks on matching dates.
+export async function exportPivtBackup() {
+  return JSON.stringify({ format: "pivt3-backup-v1", exportedAt: new Date().toISOString(), slates: await loadPivtHistory() }, null, 2);
+}
+
+export async function importPivtBackup(data) {
+  const payload = typeof data === "string" ? JSON.parse(data) : data;
+  if (payload?.format !== "pivt3-backup-v1" || !Array.isArray(payload.slates)) throw new Error("Invalid PIVT backup");
+  if (payload.slates.length > 2000) throw new Error("Backup is too large");
+  const db = await readyDb();
+  if (!db) throw new Error("Local database unavailable");
+  const existing = await loadPivtHistory();
+  const known = new Map(existing.map(row => [row.date, row]));
+  const tx = db.transaction([SLATE_STORE], "readwrite");
+  const store = tx.objectStore(SLATE_STORE);
+  for (const row of payload.slates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(row?.date || "")) || !Array.isArray(row?.picks)) continue;
+    const old = known.get(row.date);
+    if (!old) store.add(row);
+    else {
+      // Results can be added later, but the first-recorded prediction stays frozen.
+      const picks = old.picks.map(pick => {
+        const newer = row.picks.find(p => p.gameId === pick.gameId);
+        return { ...pick, result: pick.result?.completed ? pick.result : newer?.result?.completed ? newer.result : pick.result };
+      });
+      store.put({ ...old, picks });
+    }
+  }
+  await transactionDone(tx);
+  dispatchHistoryChange();
+  return loadPivtHistory();
+}
+
+export async function synchronizePivtCloud(secret) {
+  if (!secret) throw new Error("Sync key required");
+  const headers = { Authorization: `Bearer ${secret}` };
+  const remote = await fetch("/api/pivt-history", { headers, cache: "no-store" });
+  const data = await remote.json();
+  if (!remote.ok) throw new Error(data.error || "Could not read cloud history");
+  await importPivtBackup({ format: "pivt3-backup-v1", slates: data.slates });
+  const local = await loadPivtHistory();
+  const upload = await fetch("/api/pivt-history", {
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ slates: local })
+  });
+  const result = await upload.json();
+  if (!upload.ok) throw new Error(result.error || "Could not save cloud history");
+  return { slates: local.length, saved: result.saved };
 }
