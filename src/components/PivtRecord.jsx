@@ -1,9 +1,9 @@
 import React from "react";
-import { Avatar, Box, Button, CircularProgress, Divider, Stack, Typography, TextField, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
+import { Avatar, Box, CircularProgress, Divider, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
-import { easternDateKey, getPivtDbInfo, loadPivtHistory, recordPivt3Slate, resultForGame, updatePivt3Results, exportPivtBackup, importPivtBackup, synchronizePivtCloud, hasPivtCloudKey } from "../utils/pivtHistory";
+import { getPivtDbInfo, loadPivtHistory } from "../utils/pivtHistory";
 import { logoForTeam } from "../utils/teamAssets";
 
 
@@ -97,62 +97,16 @@ function slateSummary(slate) {
 
 export default function PivtRecord() {
   const [state, setState] = React.useState({ loading: true, verifying: false, error: "", history: [], dbInfo: null });
-  const [syncKey, setSyncKey] = React.useState("");
-  const [writeEnabled, setWriteEnabled] = React.useState(false);
-  const [syncStatus, setSyncStatus] = React.useState("");
-  const fileRef = React.useRef(null);
-  const downloadBackup = async () => {
-    const backup = await exportPivtBackup();
-    const url = URL.createObjectURL(new Blob([backup], { type: "application/json" }));
-    const a = document.createElement("a"); a.href = url; a.download = `pivt3-backup-${easternDateKey()}.json`; a.click();
-    URL.revokeObjectURL(url);
-  };
-  const restore = async event => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try { const rows = await importPivtBackup(await file.text()); setSyncStatus(`Imported ${rows.length} slates to Neon (original picks preserved)`); await verify(); }
-    catch (e) { setSyncStatus(e.message); }
-    event.target.value = "";
-  };
-  const cloudSync = async () => {
-    setSyncStatus("Synchronizing...");
-    try { const r = await synchronizePivtCloud(syncKey); setSyncStatus(`Neon connected: ${r.slates} slates, ${r.migrated} local slates migrated`); setWriteEnabled(true); await verify(); }
-    catch (e) { setSyncStatus(`Cloud sync unavailable: ${e.message}`); }
-  };
-
   const verify = React.useCallback(async () => {
     let history;
     try { history = await loadPivtHistory(); } catch (e) { setState(s => ({ ...s, loading: false, verifying: false, error: e.message })); return; }
     const dbInfo = await getPivtDbInfo().catch(() => null);
     setState((s) => ({ ...s, history, dbInfo, loading: false, verifying: true, error: "" }));
     try {
-      const today = easternDateKey();
-      if (hasPivtCloudKey() && !history.some((row) => row?.date === today)) {
-        const picks = await fetchTopPicks(today).catch(() => []);
-        if (picks.length) history = await recordPivt3Slate(today, picks);
-      }
-      if (!history.length) {
-        setState((s) => ({ ...s, verifying: false }));
-        return;
-      }
-
-      const months = Array.from(new Set(
-        history
-          .filter((row) => (row.picks || []).some((pick) => !pick?.result?.completed))
-          .map((row) => String(row.date || "").slice(0, 7))
-          .filter(Boolean)
-      ));
-      const batches = await Promise.all(months.map(async (key) => {
-        const [year, month] = key.split("-").map(Number);
-        return fetchMonth(year, month);
-      }));
-      const resultMap = {};
-      batches.flat().forEach((game) => {
-        if (game?.id) resultMap[String(game.id)] = resultForGame(game);
-      });
-      const next = hasPivtCloudKey() ? await updatePivt3Results(resultMap) : history;
-      const dbInfo = await getPivtDbInfo().catch(() => null);
-      setState({ loading: false, verifying: false, error: "", history: next, dbInfo });
+      // Neon verification and immutable recording run on the server.
+      const updated = await loadPivtHistory();
+      const info = await getPivtDbInfo().catch(() => null);
+      setState({ loading: false, verifying: false, error: "", history: updated, dbInfo: info });
     } catch (e) {
       setState((s) => ({ ...s, verifying: false, error: e?.message || String(e) }));
     }
@@ -255,32 +209,13 @@ export default function PivtRecord() {
           </Box>)}
         </Box>
       </Box>
-      <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, px: 2, py: 2, mb: 3 }}>
-        <Stack direction={{xs:"column",sm:"row"}} justifyContent="space-between" spacing={1}>
-          <Box><Typography sx={{ fontWeight: 850 }}>Neon database</Typography>
-            <Typography variant="body2" color="text.secondary">Neon is the primary record store. Enter your write key for automated recording and final-score verification while this tab is open. Existing browser slates can be migrated once.</Typography>
-          </Box>
-          <Typography variant="caption" sx={{ color: state.error ? "error.main" : "success.main", fontWeight:800, whiteSpace:"nowrap" }}>{state.error ? "UNAVAILABLE" : writeEnabled ? "READ / WRITE" : "READ ONLY"}</Typography>
-        </Stack>
-        <Stack direction={{xs:"column",sm:"row"}} spacing={1} sx={{ mt:2, mb:1 }}>
-          <TextField size="small" type="password" label="Database write key" value={syncKey} onChange={e=>setSyncKey(e.target.value)} sx={{ flex:1, minWidth: 180 }}/>
-          <Button variant="contained" size="small" disabled={!syncKey} onClick={cloudSync}>Connect & migrate local records</Button>
-        </Stack>
-        {!!syncStatus && <Typography variant="caption" sx={{ display:"block", mb:1 }}>{syncStatus}</Typography>}
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          <Button variant="outlined" size="small" onClick={downloadBackup}>Export database JSON</Button>
-          <Button variant="outlined" size="small" disabled={!writeEnabled} onClick={()=>fileRef.current?.click()}>Import JSON to Neon</Button>
-          <input type="file" accept="application/json,.json" ref={fileRef} hidden onChange={restore}/>
-        </Stack>
-      </Box>
-
       {state.error && <Typography variant="caption" color="error.main" sx={{ display: "block", mb: 2 }}>Result verification unavailable: {state.error}</Typography>}
 
       {!history.length && !state.loading ? (
         <Box sx={{ py: 8, borderTop: "1px solid", borderBottom: "1px solid", borderColor: "divider" }}>
           <Typography sx={{ fontWeight: 800 }}>No PIVT 3 slates recorded yet.</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: .5, maxWidth: 560 }}>
-            PIVT will start the record automatically when a current or future PIVT 3 slate appears. Existing browser history can be migrated to Neon with the write key. Past dates are never back-filled after results are known.
+            PIVT will start the record automatically when a current or future PIVT 3 slate appears. Predictions are recorded directly in Neon when PIVT 3 games are viewed before tipoff. Past dates are never back-filled after results are known.
           </Typography>
         </Box>
       ) : (

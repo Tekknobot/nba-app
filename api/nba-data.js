@@ -854,6 +854,9 @@ async function handleAction(q) {
   if (action === "top-picks") {
     const anchor = dateOnly(q.date) || new Date().toISOString().slice(0, 10);
     const picks = await topPicksForDate(anchor);
+    // Server-side capture: no browser sync key or local storage required.
+    try { await require("./pivt-store").capture(anchor, picks); }
+    catch (error) { console.error("PIVT capture failed", error); }
     return {
       date: anchor,
       picks,

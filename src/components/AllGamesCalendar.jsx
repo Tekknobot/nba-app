@@ -13,7 +13,7 @@ import GameComparePanel from "./GameComparePanel";
 import NbaNews from "./NbaNews";
 import { formatGameLabel } from "../utils/datetime";
 import { logoForTeam } from "../utils/teamAssets";
-import { easternDateKey, recordPivt3Slate, hasPivtCloudKey } from "../utils/pivtHistory";
+import { easternDateKey } from "../utils/pivtHistory";
 
 function firstOfMonth(d) {
   const x = new Date(d);
@@ -75,7 +75,7 @@ function PivtThree({ date, onOpen }) {
       .then((picks) => {
         if (cancelled) return;
         setState({ loading: false, picks, error: "" });
-        if (picks.length && hasPivtCloudKey()) recordPivt3Slate(date, picks).catch((error) => { if (!cancelled) setState(current => ({ ...current, error: error.message })); });
+        // /api/nba-data records eligible pregame picks directly in Neon.
       })
       .catch((e) => { if (!cancelled) setState({ loading: false, picks: [], error: e?.message || String(e) }); });
     return () => { cancelled = true; };
