@@ -546,7 +546,7 @@ async function getTopPlayers(teamCode, anchor, days = 21, topN = 3, stage = 2) {
 
 }
 
-async function recentTeamGames(teamCode, anchor, limit = 5, stage = 2) {
+async function recentTeamGames(teamCode, anchor, limit = 24, stage = 2) {
   const team = normCode(teamCode);
   const safeAnchor = dateOnly(anchor) || new Date().toISOString().slice(0, 10);
   const season = seasonEndYearFrom(safeAnchor);
@@ -567,7 +567,7 @@ function unavailableForecast(stage, reason, daysAway = null) {
     pick: null, homeProbability: null, awayProbability: null, confidence: 'unavailable',
     insufficientData: true, reason,
     sample: { awayGames: 0, homeGames: 0, playerStats: false, stage, availabilityVerified: false, priorUsed: false },
-    modelVersion: 'player-first-v4', seasonType: stage,
+    modelVersion: 'player-first-v5', seasonType: stage,
     factors: [reason], model: 'Current-season evidence only; prediction withheld pending sufficient data'
   };
 }
@@ -581,6 +581,14 @@ async function currentRoster(teamCode, season) {
     const athletes = groups.flatMap(x => Array.isArray(x?.items) ? x.items : [x]);
     return athletes.filter(a => a?.id).map(a => ({ id: String(a.id), name: a.displayName || a.fullName || '', status: a.status?.type || a.status?.name || null }));
   } catch { return []; }
+}
+
+// Confidence depends on evidence AND the final reported probability.
+// A larger sample permits higher confidence; it never guarantees it.
+function classifyConfidence(minGames, hasPlayerStats, pickProb, volatility) {
+  if (minGames >= 12 && hasPlayerStats && pickProb >= 64 && volatility <= 16) return 'high';
+  if (minGames >= 5 && hasPlayerStats && pickProb >= 58 && volatility <= 20) return 'medium';
+  return 'low';
 }
 
 function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlayers, homePlayers, anchor = "") {
@@ -617,9 +625,7 @@ function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlay
   const pick = homeProb >= 50 ? normCode(homeCode) : normCode(awayCode);
   const pickProb = Math.max(homeProb, awayProb);
   const volatility = Math.max(away.marginStdDev || 0, home.marginStdDev || 0);
-  let confidence = 'low';
-  if (minGames >= 12 && hasPlayerStats && pickProb >= 64 && volatility <= 16) confidence = 'high';
-  else if (minGames >= 5 && hasPlayerStats && pickProb >= 58 && volatility <= 20) confidence = 'medium';
+  const confidence = classifyConfidence(minGames, hasPlayerStats, pickProb, volatility);
   const factors = [];
   if (!sufficientData) factors.push('Insufficient current-season player and team evidence');
   if (hasPlayerStats && Math.abs(homeImpact - awayImpact) >= 1.5)
@@ -634,7 +640,7 @@ function predictionFromInputs(awayCode, homeCode, awayGames, homeGames, awayPlay
     insufficientData: !sufficientData,
     sample: { awayGames: away.games, homeGames: home.games, playerStats: hasPlayerStats,
       stage, availabilityVerified: false, priorUsed: false, teamWeight },
-    modelVersion: 'player-first-v4', seasonType: stage,
+    modelVersion: 'player-first-v5', seasonType: stage,
     form: { away, home }, rest: { away: awayRest, home: homeRest },
     playerImpact: { away: awayImpact, home: homeImpact }, factors: factors.slice(0, 4),
     model: 'Current-season player production + current-season team form + rest (no previous-season data; availability unverified)',
@@ -659,7 +665,7 @@ async function calibratePrediction(prediction, anchor) {
     const sql = neon(process.env.DATABASE_URL);
     const rows = await sql`SELECT snapshot FROM pivt3_slates WHERE date < ${anchor} ORDER BY date DESC LIMIT 600`;
     const eligible = rows.flatMap(row => row.snapshot?.picks || []).filter(p =>
-      p.modelVersion === "player-first-v4" && Number(p.seasonType) === Number(prediction.seasonType) &&
+      p.modelVersion === "player-first-v5" && Number(p.seasonType) === Number(prediction.seasonType) &&
       p.result?.completed && p.result?.actualWinner);
     if (eligible.length < 60) return prediction;
     const predicted = eligible.map(p => ({
@@ -676,7 +682,11 @@ async function calibratePrediction(prediction, anchor) {
     // Store direction before refit so away/home mapping is unambiguous.
     const homeLeads = prediction.homeProbability >= prediction.awayProbability;
     const homeProbability = Math.round(homeLeads ? adjusted * 100 : (1 - adjusted) * 100);
-    return { ...prediction, homeProbability, awayProbability: 100 - homeProbability,
+    const finalProb = Math.max(homeProbability, 100 - homeProbability);
+    const minGames = Math.min(Number(prediction.sample?.awayGames) || 0, Number(prediction.sample?.homeGames) || 0);
+    const volatility = Math.max(Number(prediction.form?.away?.marginStdDev) || 0, Number(prediction.form?.home?.marginStdDev) || 0);
+    const confidence = classifyConfidence(minGames, Boolean(prediction.sample?.playerStats), finalProb, volatility);
+    return { ...prediction, homeProbability, awayProbability: 100 - homeProbability, confidence,
       calibration: { active: true, stageSample: eligible.length, comparable: comparable.length } };
   } catch (e) {
     // Missing table before first cloud sync and temporary database errors must
@@ -700,8 +710,8 @@ async function predictionForMatchup(awayCode, homeCode, anchorInput) {
   const modelAnchor = [cutoff.toISOString().slice(0, 10), new Date().toISOString().slice(0,10)].sort()[0];
 
   const [awayGames, homeGames, awayPlayersData, homePlayersData, awayRoster, homeRoster] = await Promise.all([
-    recentTeamGames(away, modelAnchor, 5, predictionStage(anchor)),
-    recentTeamGames(home, modelAnchor, 5, predictionStage(anchor)),
+    recentTeamGames(away, modelAnchor, 24, predictionStage(anchor)),
+    recentTeamGames(home, modelAnchor, 24, predictionStage(anchor)),
     getTopPlayers(away, modelAnchor, 45, 7, predictionStage(anchor)),
     getTopPlayers(home, modelAnchor, 45, 7, predictionStage(anchor)),
     currentRoster(away, seasonEndYearFrom(anchor)),
@@ -731,7 +741,7 @@ function predictionRankScore(prediction) {
   return prediction?.insufficientData ? -999 : Math.round((edge * reliability + Math.min(5, sample) * .45 + confidenceBonus - availabilityPenalty) * 10) / 10;
 }
 
-function recentGamesFromPool(pool, teamCode, anchor, limit = 5) {
+function recentGamesFromPool(pool, teamCode, anchor, limit = 24) {
   return dedupeCompletedGames(pool || [], teamCode, anchor, limit);
 }
 
@@ -749,7 +759,7 @@ async function topPicksForDate(date) {
   modelEnd.setUTCDate(modelEnd.getUTCDate() - 1);
   const historyEnd = [modelEnd.toISOString().slice(0, 10), new Date().toISOString().slice(0,10)].sort()[0];
   const historyStartD = new Date(modelEnd);
-  historyStartD.setUTCDate(historyStartD.getUTCDate() - 27);
+  historyStartD.setUTCDate(historyStartD.getUTCDate() - 100);
   const historyStart = historyStartD.toISOString().slice(0, 10);
   const history = (await scoreboard(historyStart, historyEnd)).filter((g) => g.completed && Number(g.seasonStageId) === predictionStage(anchor));
 
@@ -769,8 +779,8 @@ async function topPicksForDate(date) {
   // This keeps PIVT 3 responsive while guaranteeing its displayed percentage
   // is the same percentage the user sees after opening that matchup.
   const ranked = games.map((game) => {
-    const awayGames = recentGamesFromPool(history, game.away?.code, historyEnd, 5);
-    const homeGames = recentGamesFromPool(history, game.home?.code, historyEnd, 5);
+    const awayGames = recentGamesFromPool(history, game.away?.code, historyEnd, 24);
+    const homeGames = recentGamesFromPool(history, game.home?.code, historyEnd, 24);
     const awayPlayers = playersFor(game.away?.code);
     const homePlayers = playersFor(game.home?.code);
     const prediction = predictionFromInputs(game.away?.code, game.home?.code, awayGames, homeGames, awayPlayers, homePlayers, anchor);
