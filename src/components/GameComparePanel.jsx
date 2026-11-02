@@ -44,7 +44,7 @@ function FormRow({ game }) {
   );
 }
 
-function TeamSection({ team, form, players, playersMode }) {
+function TeamSection({ team, form, formError, players, playersMode, playersError }) {
   return (
     <Box sx={{ minWidth: 0 }}>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
@@ -58,7 +58,7 @@ function TeamSection({ team, form, players, playersMode }) {
       <Typography variant="overline" color="text.secondary">Recent form</Typography>
       <Box sx={{ mt: .35 }}>
         {(form || []).slice(0, 5).map((g, i) => <FormRow key={`${g.date}-${g.opp}-${i}`} game={g} />)}
-        {!form?.length && <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>No completed games available.</Typography>}
+        {!form?.length && <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>{formError ? "Recent results temporarily unavailable." : "No completed games for this season stage yet."}</Typography>}
       </Box>
 
       <Divider sx={{ my: 1.5 }} />
@@ -68,7 +68,7 @@ function TeamSection({ team, form, players, playersMode }) {
       </Stack>
       <Box sx={{ mt: .35 }}>
         {(players || []).map((p) => <PlayerRow key={p.player_id} item={p} />)}
-        {!players?.length && <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>Player data unavailable.</Typography>}
+        {!players?.length && <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>{playersError ? "Player data temporarily unavailable." : "Player data unavailable."}</Typography>}
       </Box>
     </Box>
   );
@@ -138,18 +138,22 @@ function PredictionBlock({ game, prediction }) {
 }
 
 export default function GameComparePanel({ game }) {
-  const anchor = (game?._iso || game?.dateKey || new Date().toISOString()).slice(0, 10);
+  // NBA calendar dates are Eastern; late games can fall on the next UTC day.
+  const anchor = (game?.dateKey || game?._iso || new Date().toISOString()).slice(0, 10);
   const pregame = !/final|in progress|halftime|quarter|q\d|end of/i.test(String(game?.status || ""));
-  const [state, setState] = useState({ loading: true, error: "", awayForm: [], homeForm: [], awayPlayers: [], homePlayers: [], awayMode: "", homeMode: "", h2h: null, prediction: null });
+  const stage = [1, 2, 3].includes(Number(game?.seasonStageId)) ? Number(game.seasonStageId) : 2;
+  const [state, setState] = useState({ loading: true, awayForm: [], homeForm: [], awayFormError: false, homeFormError: false, awayPlayers: [], homePlayers: [], awayPlayersError: false, homePlayersError: false, awayMode: "", homeMode: "", h2h: null, prediction: null });
 
   useEffect(() => {
     if (!game?.away?.code || !game?.home?.code) return;
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true, error: "" }));
+    setState((s) => ({ ...s, loading: true }));
 
-    Promise.all([
-      api({ action: "team-last10", team: game.away.code, anchor }),
-      api({ action: "team-last10", team: game.home.code, anchor }),
+    // Sections are independent: a failed box score, prediction, or head-to-head
+    // lookup must not hide otherwise valid recent-game results for either team.
+    Promise.allSettled([
+      api({ action: "team-last10", team: game.away.code, anchor, stage }),
+      api({ action: "team-last10", team: game.home.code, anchor, stage }),
       api({ action: "top-players", team: game.away.code, anchor, days: "21", topN: "3" }),
       api({ action: "top-players", team: game.home.code, anchor, days: "21", topN: "3" }),
       api({ action: "h2h", a: game.away.code, b: game.home.code, start: seasonStart(anchor), end: anchor }),
@@ -158,26 +162,36 @@ export default function GameComparePanel({ game }) {
           ? Promise.resolve({ prediction: game._pivtPrediction })
           : api({ action: "prediction", away: game.away.code, home: game.home.code, anchor }).catch(() => ({ prediction: null })))
         : Promise.resolve({ prediction: null }),
-    ]).then(([awayForm, homeForm, awayPlayers, homePlayers, h2h, prediction]) => {
+    ]).then((results) => {
       if (cancelled) return;
+      const [awayFormResult, homeFormResult, awayPlayersResult, homePlayersResult, h2hResult, predictionResult] = results;
+      const value = (result, fallback = {}) => result.status === "fulfilled" ? result.value : fallback;
+      const awayForm = value(awayFormResult);
+      const homeForm = value(homeFormResult);
+      const awayPlayers = value(awayPlayersResult);
+      const homePlayers = value(homePlayersResult);
+      const h2h = value(h2hResult, null);
+      const prediction = value(predictionResult);
       setState({
         loading: false,
-        error: "",
         awayForm: awayForm?.games || [],
         homeForm: homeForm?.games || [],
+        awayFormError: awayFormResult.status === "rejected",
+        homeFormError: homeFormResult.status === "rejected",
         awayPlayers: awayPlayers?.players || [],
         homePlayers: homePlayers?.players || [],
+        awayPlayersError: awayPlayersResult.status === "rejected",
+        homePlayersError: homePlayersResult.status === "rejected",
         awayMode: awayPlayers?._mode || "",
         homeMode: homePlayers?._mode || "",
-        h2h: { away: h2h?.aWins || 0, home: h2h?.bWins || 0 },
+        // Do not report a 0–0 season series when the request actually failed.
+        h2h: h2h ? { away: h2h.aWins || 0, home: h2h.bWins || 0 } : null,
         prediction: prediction?.prediction || null,
       });
-    }).catch((e) => {
-      if (!cancelled) setState((s) => ({ ...s, loading: false, error: e?.message || String(e) }));
     });
 
     return () => { cancelled = true; };
-  }, [game?.away?.code, game?.home?.code, game?._pivtPrediction, anchor, pregame]);
+  }, [game?.away?.code, game?.home?.code, game?._pivtPrediction, anchor, pregame, stage]);
 
   const live = /in progress|halftime|quarter|q\d|end of/i.test(String(game?.status || ""));
   const final = Boolean(game?.completed) || /final/i.test(String(game?.status || ""));
@@ -206,14 +220,12 @@ export default function GameComparePanel({ game }) {
         {state.h2h && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: .75 }}>Season series: {game?.away?.code} {state.h2h.away}–{state.h2h.home} {game?.home?.code}</Typography>}
       </Box>
 
-      {!state.loading && !state.error && pregame && <PredictionBlock game={game} prediction={state.prediction} />}
+      {!state.loading && pregame && <PredictionBlock game={game} prediction={state.prediction} />}
       <Divider sx={{ my: 1.5 }} />
-      {state.loading ? <Stack alignItems="center" sx={{ py: 8 }}><CircularProgress size={18} /></Stack> : state.error ? (
-        <Typography variant="body2" color="text.secondary">Matchup detail unavailable.</Typography>
-      ) : (
+      {state.loading ? <Stack alignItems="center" sx={{ py: 8 }}><CircularProgress size={18} /></Stack> : (
         <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 2.5 }}>
-          <TeamSection team={game.away} form={state.awayForm} players={state.awayPlayers} playersMode={state.awayMode} />
-          <TeamSection team={game.home} form={state.homeForm} players={state.homePlayers} playersMode={state.homeMode} />
+          <TeamSection team={game.away} form={state.awayForm} formError={state.awayFormError} players={state.awayPlayers} playersMode={state.awayMode} playersError={state.awayPlayersError} />
+          <TeamSection team={game.home} form={state.homeForm} formError={state.homeFormError} players={state.homePlayers} playersMode={state.homeMode} playersError={state.homePlayersError} />
         </Box>
       )}
       <Divider sx={{ my: 1.5 }} />

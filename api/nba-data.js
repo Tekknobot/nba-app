@@ -21,6 +21,7 @@ const ESPN_TO_UI = {
 };
 
 const cache = new Map();
+const inFlight = new Map();
 const TTL = {
   scoreboard: 20 * 1000,
   schedule: 30 * 60 * 1000,
@@ -41,28 +42,55 @@ function cacheSet(key, value, ttl) {
   cache.set(key, { value, expires: Date.now() + ttl });
   return value;
 }
+function scoreboardTtl(month) {
+  // Finished months are immutable; the current NBA calendar month can contain
+  // newly finalized games and needs a much shorter refresh period.
+  return month === dateKeyEastern(new Date()).slice(0, 7).replace("-", "")
+    ? TTL.scoreboard : TTL.schedule;
+}
 
 async function fetchJson(url, ttl = 5 * 60 * 1000) {
   const key = String(url);
   const cached = cacheGet(key);
   if (cached) return cached;
+  // A matchup asks for both teams at once, and several sections share the
+  // same month of scores. Do not send duplicate requests to ESPN concurrently.
+  if (inFlight.has(key)) return inFlight.get(key);
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 9000);
-  try {
-    const r = await fetch(url, {
-      headers: {
-        Accept: "application/json,text/plain,*/*",
-        "User-Agent": "PIVT/2.0 (+keyless public NBA data adapter)",
-      },
-      signal: controller.signal,
-    });
-    if (!r.ok) throw new Error(`upstream HTTP ${r.status}`);
-    const json = await r.json();
-    return cacheSet(key, json, ttl);
-  } finally {
-    clearTimeout(timer);
-  }
+  const request = (async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 7000);
+      try {
+        const r = await fetch(url, {
+          headers: {
+            Accept: "application/json,text/plain,*/*",
+            "User-Agent": "PIVT/2.0 (+keyless public NBA data adapter)",
+          },
+          signal: controller.signal,
+        });
+        if (!r.ok) {
+          const error = new Error(`upstream HTTP ${r.status}`);
+          error.status = r.status;
+          throw error;
+        }
+        const json = await r.json();
+        return cacheSet(key, json, ttl);
+      } catch (error) {
+        // Retry only brief transient failures. Never retry an aborted request:
+        // a slow upstream must not keep the matchup drawer spinning forever.
+        const retryable = error?.status === 429 || error?.status === 502 ||
+          error?.status === 503 || error?.status === 504 || error instanceof TypeError;
+        if (attempt !== 0 || !retryable) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  })();
+  inFlight.set(key, request);
+  try { return await request; }
+  finally { inFlight.delete(key); }
 }
 
 function normCode(v = "") {
@@ -70,6 +98,7 @@ function normCode(v = "") {
   return ESPN_TO_UI[c] || c;
 }
 function asNum(v) {
+  if (v === null || v === undefined || String(v).trim() === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -118,18 +147,34 @@ function teamFromCompetitor(c) {
   };
 }
 
-function normalizeCompetition(comp, event = {}) {
+function seasonStage(value) {
+  // In ESPN's payload competition.type.id describes the KIND OF GAME (e.g.
+  // STD = 1), not the NBA season stage. Never use it to infer preseason.
+  if (value && typeof value === "object") return seasonStage(value.type ?? value.id);
+  const n = Number(value);
+  if ([1, 2, 3].includes(n)) return n;
+  const text = String(value || "").toLowerCase();
+  if (/pre/.test(text)) return 1;
+  if (/reg/.test(text)) return 2;
+  if (/post|playoff/.test(text)) return 3;
+  return null;
+}
+
+function normalizeCompetition(comp, event = {}, stageHint = 2) {
   const competitors = Array.isArray(comp?.competitors) ? comp.competitors : [];
   const homeC = competitors.find((c) => String(c?.homeAway).toLowerCase() === "home") || competitors[0];
   const awayC = competitors.find((c) => String(c?.homeAway).toLowerCase() === "away") || competitors[1];
   if (!homeC || !awayC) return null;
 
   const dt = event?.date || comp?.date || event?.competitions?.[0]?.date || null;
+  const validDate = dt && Number.isFinite(new Date(dt).getTime());
   const statusType = event?.status?.type || comp?.status?.type || {};
   const state = String(statusType?.state || "").toLowerCase();
   const completed = Boolean(statusType?.completed) || state === "post" || /final/i.test(statusType?.description || "");
   const status = statusType?.shortDetail || statusType?.detail || statusType?.description || (completed ? "Final" : "Scheduled");
-  const seasonType = Number(event?.season?.type ?? comp?.type?.id ?? comp?.season?.type ?? 2);
+  const seasonType = seasonStage(event?.season?.type) ??
+    seasonStage(event?.seasonType) ?? seasonStage(comp?.season?.type) ??
+    seasonStage(stageHint) ?? 2;
   const homeScore = asNum(homeC?.score?.value ?? homeC?.score);
   const awayScore = asNum(awayC?.score?.value ?? awayC?.score);
   const home = teamFromCompetitor(homeC);
@@ -137,8 +182,8 @@ function normalizeCompetition(comp, event = {}) {
 
   return {
     id: String(event?.id || comp?.id || ""),
-    _iso: dt ? new Date(dt).toISOString() : "",
-    dateKey: dateKeyEastern(dt),
+    _iso: validDate ? new Date(dt).toISOString() : "",
+    dateKey: validDate ? dateKeyEastern(dt) : "",
     status,
     state,
     completed,
@@ -152,9 +197,9 @@ function normalizeCompetition(comp, event = {}) {
   };
 }
 
-function normalizeEvent(event) {
+function normalizeEvent(event, stageHint = 2) {
   const comp = event?.competitions?.[0];
-  return comp ? normalizeCompetition(comp, event) : null;
+  return comp ? normalizeCompetition(comp, event, stageHint) : null;
 }
 
 async function scoreboard(start, end) {
@@ -175,8 +220,8 @@ async function scoreboard(start, end) {
     const u = new URL(`${ESPN_SITE}/scoreboard`);
     u.searchParams.set("dates", dates);
     u.searchParams.set("limit", "1000");
-    const j = await fetchJson(u, TTL.scoreboard);
-    return (Array.isArray(j?.events) ? j.events : []).map(normalizeEvent).filter(Boolean);
+    const j = await fetchJson(u, scoreboardTtl(dates.slice(0, 6)));
+    return (Array.isArray(j?.events) ? j.events : []).map((event) => normalizeEvent(event)).filter(Boolean);
   }
 
   // Cross-month windows are fetched a month at a time instead of one HTTP
@@ -193,8 +238,8 @@ async function scoreboard(start, end) {
     const u = new URL(`${ESPN_SITE}/scoreboard`);
     u.searchParams.set("dates", month);
     u.searchParams.set("limit", "1000");
-    const j = await fetchJson(u, TTL.scoreboard);
-    return (Array.isArray(j?.events) ? j.events : []).map(normalizeEvent).filter(Boolean);
+    const j = await fetchJson(u, scoreboardTtl(month));
+    return (Array.isArray(j?.events) ? j.events : []).map((event) => normalizeEvent(event)).filter(Boolean);
   }));
 
   const seen = new Set();
@@ -215,7 +260,7 @@ async function teamSchedule(teamCode, season, seasonType = 2) {
   u.searchParams.set("season", String(season));
   u.searchParams.set("seasontype", String(seasonType));
   const j = await fetchJson(u, TTL.schedule);
-  return (Array.isArray(j?.events) ? j.events : []).map(normalizeEvent).filter(Boolean);
+  return (Array.isArray(j?.events) ? j.events : []).map((event) => normalizeEvent(event, seasonType)).filter(Boolean);
 }
 
 async function gameSummary(id) {
@@ -257,6 +302,8 @@ function dedupeCompletedGames(games, teamCode, anchor, limit = 10) {
   return (games || [])
     .filter((g) => {
       if (!g?.completed || !g?.dateKey || (anchor && g.dateKey > anchor)) return false;
+      // A final without reported scores is not a trustworthy result.
+      if (!Number.isFinite(g.homeScore) || !Number.isFinite(g.awayScore)) return false;
       if (g?.home?.code !== code && g?.away?.code !== code) return false;
       const key = String(g.id || `${g.dateKey}-${g.away?.code}-${g.home?.code}`);
       if (seen.has(key)) return false;
@@ -546,13 +593,46 @@ async function getTopPlayers(teamCode, anchor, days = 21, topN = 3, stage = 2) {
 
 }
 
-async function recentTeamGames(teamCode, anchor, limit = 24, stage = 2) {
+async function recentTeamGames(teamCode, anchor, limit = 24, stage = 2, refreshRecent = false) {
   const team = normCode(teamCode);
-  const safeAnchor = dateOnly(anchor) || new Date().toISOString().slice(0, 10);
+  if (!TEAM_ID[team]) throw new Error(`Unknown NBA team code: ${teamCode}`);
+  const safeAnchor = dateOnly(anchor) || dateKeyEastern(new Date());
   const season = seasonEndYearFrom(safeAnchor);
-  const games = await teamSchedule(team, season, stage).catch(() => []);
-  return dedupeCompletedGames(games.filter(g => Number(g.seasonStageId) === stage), team, safeAnchor, limit);
+  let scheduleGames = [];
+  let scheduleError = null;
+  try {
+    scheduleGames = await teamSchedule(team, season, stage);
+  } catch (error) {
+    scheduleError = error;
+    console.warn(`PIVT team schedule unavailable for ${team}:`, error.message);
+  }
+  const fromSchedule = dedupeCompletedGames(
+    scheduleGames.filter((g) => Number(g.seasonStageId) === stage), team, safeAnchor, limit
+  );
+  // ESPN sometimes omits games or their season metadata on the team schedule.
+  // Refresh the visible recent-form section from league scoreboard results;
+  // also fall back when the team feed has fewer than five usable finals.
+  if (!refreshRecent && fromSchedule.length >= Math.min(limit, 5)) return fromSchedule;
 
+  const cutoff = [safeAnchor, dateKeyEastern(new Date())].sort()[0];
+  const start = new Date(`${cutoff}T12:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - (refreshRecent ? 55 : Math.max(60, Math.min(140, limit * 5))));
+  // Restrict fallback to the current NBA season: do not borrow last year's
+  // results to make an early-season sample look larger than it is.
+  const seasonStart = `${season - 1}-10-01`;
+  const startDate = [start.toISOString().slice(0, 10), seasonStart].sort()[1];
+  try {
+    const leagueGames = await scoreboard(startDate, cutoff);
+    return dedupeCompletedGames(
+      [...fromSchedule, ...leagueGames.filter((g) => Number(g.seasonStageId) === stage)],
+      team, safeAnchor, limit
+    );
+  } catch (error) {
+    console.warn(`PIVT scoreboard fallback unavailable for ${team}:`, error.message);
+    // Distinguish an upstream outage from a genuinely empty season.
+    if (scheduleError || !fromSchedule.length) throw new Error(`Recent results for ${team} temporarily unavailable`);
+    return fromSchedule;
+  }
 }
 
 // Do not manufacture distant forecasts from lineups that are not confirmed.
@@ -827,8 +907,8 @@ async function handleAction(q) {
   if (action === "team-last10") {
     const team = normCode(q.team);
     const anchor = dateOnly(q.anchor) || new Date().toISOString().slice(0, 10);
-    const season = seasonEndYearFrom(anchor);
-    const games = (await recentTeamGames(team, anchor, 10)).map((g) => resultRow(g, team));
+    const stage = [1, 2, 3].includes(Number(q.stage)) ? Number(q.stage) : 2;
+    const games = (await recentTeamGames(team, anchor, 10, stage, true)).map((g) => resultRow(g, team));
     return { team, games, source: "ESPN public JSON (no key)", sources: ["ESPN public site JSON"], keyRequired: false };
   }
 
@@ -933,7 +1013,7 @@ async function handler(req, res) {
     // Live-facing schedule surfaces must not sit behind Vercel's multi-minute
     // edge cache. The adapter still keeps a short in-process scoreboard cache
     // to avoid hammering the free upstream feed.
-    const liveFacing = query.action === "month" || query.action === "pulse";
+    const liveFacing = query.action === "month" || query.action === "pulse" || query.action === "team-last10";
     res.setHeader(
       "Cache-Control",
       liveFacing
